@@ -13,8 +13,6 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const bot = new Telegraf(process.env.BOT_TOKEN!);
 
-// --- 1. CORE MESSAGE HANDLER (TEXT & VOICE) ---
-
 async function handleUserIntent(ctx: Context, text: string) {
   const userId = ctx.from?.id;
   if (!userId) return;
@@ -23,18 +21,68 @@ async function handleUserIntent(ctx: Context, text: string) {
     const parsed = await parseMedCommand(text);
 
     switch (parsed.intent) {
-      case 'add_medication':
+      case 'add_medication': {
+        // --- DUPLICATE CHECK ---
+        const medicationName = parsed.medicationName || 'Unknown Medication';
+        
+        const existing = await db.db.select()
+          .from(db.medications)
+          .where(
+            and(
+              eq(db.medications.telegramId, userId),
+              ilike(db.medications.name, medicationName)
+            )
+          ).limit(1);
+
+        if (existing.length > 0) {
+          return await ctx.reply(`⚠️ You already have "${medicationName}" in your schedule. If you want to change it, say "Update ${medicationName}".`);
+        }
+
         await db.db.insert(db.medications).values({
           telegramId: userId,
-          name: parsed.medicationName || 'Unknown Medication',
+          name: medicationName,
           dosage: parsed.dosage || 'As prescribed',
           schedule: parsed.time || '09:00',
-          frequency: parsed.frequencyDays || 1, // Default to daily
+          frequency: parsed.frequencyDays || 1,
         });
         
         const freqText = (!parsed.frequencyDays || parsed.frequencyDays === 1) ? 'daily' : `every ${parsed.frequencyDays} days`;
-        await ctx.reply(`✅ Added: ${parsed.medicationName} (${parsed.dosage}) at ${parsed.time || '09:00'} (${freqText}).`);
+        await ctx.reply(`✅ Added: ${medicationName} (${parsed.dosage || 'As prescribed'}) at ${parsed.time || '09:00'} (${freqText}).`);
         break;
+      }
+
+      case 'update_medication': {
+        // --- UPDATE FUNCTIONALITY ---
+        if (!parsed.medicationName) {
+          return await ctx.reply("Please specify which medication you want to update.");
+        }
+
+        const updateData: any = {};
+        if (parsed.dosage) updateData.dosage = parsed.dosage;
+        if (parsed.time) updateData.schedule = parsed.time;
+        if (parsed.frequencyDays) updateData.frequency = parsed.frequencyDays;
+
+        if (Object.keys(updateData).length === 0) {
+          return await ctx.reply("What details would you like to update for this medication? (e.g., time, dosage)");
+        }
+
+        const updated = await db.db.update(db.medications)
+          .set(updateData)
+          .where(
+            and(
+              eq(db.medications.telegramId, userId),
+              ilike(db.medications.name, `%${parsed.medicationName}%`)
+            )
+          )
+          .returning();
+
+        if (updated.length > 0) {
+          await ctx.reply(`🔄 Updated ${parsed.medicationName} successfully.`);
+        } else {
+          await ctx.reply(`⚠️ I couldn't find "${parsed.medicationName}" in your list to update.`);
+        }
+        break;
+      }
       
       case 'remove_medication':
         if (parsed.medicationName) {

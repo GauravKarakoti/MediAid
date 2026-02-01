@@ -4,11 +4,11 @@ import fs from 'fs';
 
 dotenv.config();
 
-// Export the groq instance so it can be used in bot.ts
 export const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export interface MedCommand {
-  intent: 'add_medication' | 'log_intake' | 'query_schedule' | 'remove_medication' | 'unknown';
+  // Added 'update_medication' intent
+  intent: 'add_medication' | 'log_intake' | 'query_schedule' | 'remove_medication' | 'update_medication' | 'unknown';
   medicationName?: string;
   dosage?: string;
   time?: string;
@@ -24,8 +24,9 @@ Modes:
 1. "log_intake": User took medicine (e.g., "I took my blue pill").
 2. "add_medication": New regimen (e.g., "Take 5mg of Lisinopril every 2 days at 9am").
    - Extract "frequencyDays" as an integer (e.g., "daily" -> 1, "every 2 days" -> 2, "every other day" -> 2). Default is 1.
-3. "remove_medication": User wants to stop a med (e.g., "Stop taking Aspirin", "Remove Lisinopril").
+3. "remove_medication": User wants to stop a med (e.g., "Stop taking Aspirin").
 4. "query_schedule": Asking what to take.
+5. "update_medication": Change an existing medication's details (e.g., "Change my Aspirin dosage to 10mg" or "Update Lisinopril time to 10 PM").
 
 Return: 
 { 
@@ -39,9 +40,6 @@ Return:
 }
 `;
 
-/**
- * Transcribes an audio file using Groq Whisper
- */
 export async function transcribeAudio(filePath: string): Promise<string> {
   const transcription = await groq.audio.transcriptions.create({
     file: fs.createReadStream(filePath),

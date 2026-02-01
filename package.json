@@ -1,0 +1,36 @@
+{
+  "name": "medassist",
+  "version": "1.0.0",
+  "description": "",
+  "main": "bot.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/bot.js",
+    "dev": "ts-node-dev --respawn --transpile-only src/bot.ts",
+    "db:gen": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
+    "db:push": "drizzle-kit push"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.2",
+    "axios": "^1.13.4",
+    "dotenv": "^17.2.3",
+    "drizzle-orm": "^0.45.1",
+    "ethers": "^6.16.0",
+    "express": "^5.2.1",
+    "groq-sdk": "^0.37.0",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.1.0",
+    "drizzle-kit": "^0.31.8",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}

@@ -11,7 +11,7 @@ import { eq } from 'drizzle-orm';
 const bot = new Telegraf(process.env.BOT_TOKEN!);
 
 bot.start((ctx) => {
-  ctx.reply("👵 Welcome to MedAssist. I'll help you remember your medicine. You can talk to me or use buttons.");
+  ctx.reply("👵 Welcome to MedAid. I'll help you remember your medicine. You can talk to me or use buttons.");
 });
 
 // Handle Voice Messages (Core feature for elderly users)
@@ -60,4 +60,4 @@ bot.action('missed_dose', async (ctx) => {
 });
 
 bot.launch();
-console.log("MedAssist Bot is running...");
+console.log("MedAid Bot is running...");

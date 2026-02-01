@@ -144,6 +144,14 @@ async function handleUserIntent(ctx: Context, text: string) {
           await ctx.reply(`📋 Your Schedule:\n${list}`);
         }
         break;
+      
+      case 'general_conversation':
+        if (parsed.response) {
+            await ctx.reply(parsed.response);
+        } else {
+            await ctx.reply("I'm here! How can I help you with your medications today?");
+        }
+        break;
 
       default:
         await ctx.reply(parsed.parsedMessage || "I'm here to help with your meds. You can say 'I took my aspirin', 'Add 5mg Lisinopril at 8 AM', or 'Remove Aspirin'.");

@@ -7,13 +7,14 @@ dotenv.config();
 export const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export interface MedCommand {
-  // Added 'update_medication' intent
-  intent: 'add_medication' | 'log_intake' | 'query_schedule' | 'remove_medication' | 'update_medication' | 'unknown';
+  // Added 'update_medication' and 'general_conversation' intent
+  intent: 'add_medication' | 'log_intake' | 'query_schedule' | 'remove_medication' | 'update_medication' | 'general_conversation' | 'unknown';
   medicationName?: string;
   dosage?: string;
   time?: string;
   frequencyDays?: number;
   parsedMessage?: string;
+  response?: string; // Field for conversational responses
 }
 
 const systemPrompt = `
@@ -27,6 +28,8 @@ Modes:
 3. "remove_medication": User wants to stop a med (e.g., "Stop taking Aspirin").
 4. "query_schedule": Asking what to take.
 5. "update_medication": Change an existing medication's details (e.g., "Change my Aspirin dosage to 10mg" or "Update Lisinopril time to 10 PM").
+6. "general_conversation": The user is engaging in normal conversation, asking a general question, or saying hello (e.g., "Hi", "How are you?", "What's the weather?"). 
+   - In this case, generate a friendly, helpful, and concise response suitable for an elderly user in the "response" field.
 
 Return: 
 { 
@@ -36,7 +39,8 @@ Return:
   "dosage": string, 
   "time": "HH:MM", 
   "frequencyDays": number,
-  "parsedMessage": string 
+  "parsedMessage": string,
+  "response": string
 }
 `;
 

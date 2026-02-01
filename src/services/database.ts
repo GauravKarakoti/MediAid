@@ -15,6 +15,8 @@ export const medications = pgTable('medications', {
   name: text('name').notNull(),
   dosage: text('dosage').notNull(),
   schedule: text('schedule').notNull(), // e.g., "08:00, 20:00"
+  frequency: integer('frequency').default(1), // Interval in days (1 = daily, 2 = every other day)
+  createdAt: timestamp('created_at').defaultNow(), // Used to calculate frequency offsets
   reminderEnabled: boolean('reminder_enabled').default(true),
 });
 

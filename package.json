@@ -4,8 +4,8 @@
   "description": "",
   "main": "bot.js",
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/bot.js",
+    "build": "tsc --outDir dist",
+    "start": "node dist/src/bot.js",
     "dev": "tsx watch src/bot.ts",
     "db:gen": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",

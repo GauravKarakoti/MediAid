@@ -5,11 +5,11 @@ dotenv.config();
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export interface MedCommand {
-  success: boolean;
-  intent: "log_intake" | "add_medication" | "query_schedule" | "unknown";
+  intent: 'add_medication' | 'log_intake' | 'query_schedule' | 'unknown';
   medicationName?: string;
   dosage?: string;
-  parsedMessage: string;
+  time?: string;      // Add this line
+  parsedMessage?: string;
 }
 
 const systemPrompt = `

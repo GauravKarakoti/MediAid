@@ -5,9 +5,9 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import cron from 'node-cron';
-import { parseMedCommand } from './services/groq-client.js';
+import { parseMedCommand, transcribeAudio } from './services/groq-client.js'; // Added transcribeAudio
 import * as db from './services/database.js';
-import { eq } from 'drizzle-orm';
+import { eq, and, ilike } from 'drizzle-orm'; // Added ilike and and
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -15,9 +15,6 @@ const bot = new Telegraf(process.env.BOT_TOKEN!);
 
 // --- 1. CORE MESSAGE HANDLER (TEXT & VOICE) ---
 
-/**
- * Processes the user's intent after text is extracted/transcribed.
- */
 async function handleUserIntent(ctx: Context, text: string) {
   const userId = ctx.from?.id;
   if (!userId) return;
@@ -27,24 +24,40 @@ async function handleUserIntent(ctx: Context, text: string) {
 
     switch (parsed.intent) {
       case 'add_medication':
-        // Save to database
         await db.db.insert(db.medications).values({
           telegramId: userId,
           name: parsed.medicationName || 'Unknown Medication',
           dosage: parsed.dosage || 'As prescribed',
-          schedule: parsed.time || '09:00', // Default if time not parsed
+          schedule: parsed.time || '09:00',
         });
         await ctx.reply(`✅ Added: ${parsed.medicationName} (${parsed.dosage}) at ${parsed.time || '09:00'}.`);
         break;
 
       case 'log_intake':
-        // Log adherence
+        // ACTUAL IMPLEMENTATION: Look up the medication ID by name for this user
+        let medId: number | null = null;
+        if (parsed.medicationName) {
+            const existingMeds = await db.db.select()
+                .from(db.medications)
+                .where(
+                    and(
+                        eq(db.medications.telegramId, userId),
+                        ilike(db.medications.name, `%${parsed.medicationName}%`)
+                    )
+                )
+                .limit(1);
+            
+            if (existingMeds.length > 0) {
+                medId = existingMeds[0].id;
+            }
+        }
+
         await db.db.insert(db.adherenceLogs).values({
           telegramId: userId,
           status: 'taken',
-          medicationId: 0, // In a full app, you'd look up the ID by name
+          medicationId: medId, // Uses actual ID if found, else null
         });
-        await ctx.reply(`📊 Logged: ${parsed.parsedMessage}`);
+        await ctx.reply(`📊 Logged: ${parsed.parsedMessage || `Intake of ${parsed.medicationName}`}`);
         break;
 
       case 'query_schedule':
@@ -74,12 +87,10 @@ bot.start((ctx) => {
   );
 });
 
-// Text messages
 bot.on(message('text'), async (ctx) => {
   await handleUserIntent(ctx, ctx.message.text);
 });
 
-// Voice messages
 bot.on(message('voice'), async (ctx) => {
   const userId = ctx.from.id;
   const ogaPath = path.join(__dirname, `temp_${userId}.oga`);
@@ -90,10 +101,11 @@ bot.on(message('voice'), async (ctx) => {
     const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' });
     
     fs.writeFileSync(ogaPath, Buffer.from(response.data));
-    execSync(`ffmpeg -i ${ogaPath} ${mp3Path} -y`);
+    // Convert OGA to MP3 for Whisper
+    execSync(`ffmpeg -i "${ogaPath}" "${mp3Path}" -y`);
 
-    // NOTE: In a production app, you would send mp3Path to Groq Whisper or another STT service here.
-    const transcript = "Placeholder transcript from STT service"; 
+    // ACTUAL IMPLEMENTATION: Call Groq Whisper STT
+    const transcript = await transcribeAudio(mp3Path); 
     
     await handleUserIntent(ctx, transcript);
   } catch (e) {
@@ -107,7 +119,6 @@ bot.on(message('voice'), async (ctx) => {
 
 // --- 3. MEDICATION REMINDERS (CRON) ---
 
-// Checks every minute for medications due now
 cron.schedule('* * * * *', async () => {
   const now = new Date();
   const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
@@ -126,7 +137,7 @@ cron.schedule('* * * * *', async () => {
   }
 });
 
-// --- 4. ADHERENCE LOGGING & CAREGIVER NOTIFICATIONS ---
+// --- 4. ADHERENCE LOGGING ---
 
 bot.action(/taken_(.+)/, async (ctx) => {
   const medId = parseInt(ctx.match[1]!);
@@ -143,14 +154,12 @@ bot.action(/missed_(.+)/, async (ctx) => {
   const medId = parseInt(ctx.match[1]!);
   const patientId = ctx.from!.id;
 
-  // Log missed dose
   await db.db.insert(db.adherenceLogs).values({
     telegramId: patientId,
     medicationId: medId,
     status: 'missed'
   });
 
-  // Notify Caregiver
   const caregiver = await db.db.select().from(db.caregivers).where(eq(db.caregivers.patientTelegramId, patientId));
   if (caregiver[0]) {
     await bot.telegram.sendMessage(
@@ -163,11 +172,8 @@ bot.action(/missed_(.+)/, async (ctx) => {
   await ctx.editMessageText("⚠️ I've noted that you missed it and notified your caregiver.");
 });
 
-// --- 5. INITIALIZATION ---
-
 bot.launch();
 console.log("🚀 MediAid Bot is running and monitoring schedules...");
 
-// Enable graceful stop
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));

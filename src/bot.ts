@@ -5,9 +5,9 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import cron from 'node-cron';
-import { parseMedCommand, transcribeAudio } from './services/groq-client.js'; // Added transcribeAudio
+import { parseMedCommand, transcribeAudio } from './services/groq-client.js';
 import * as db from './services/database.js';
-import { eq, and, ilike } from 'drizzle-orm'; // Added ilike and and
+import { eq, and, ilike, sql, isNull } from 'drizzle-orm';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -48,14 +48,14 @@ async function handleUserIntent(ctx: Context, text: string) {
                 .limit(1);
             
             if (existingMeds.length > 0) {
-                medId = existingMeds[0].id;
+                medId = existingMeds[0]!.id;
             }
         }
 
         await db.db.insert(db.adherenceLogs).values({
           telegramId: userId,
           status: 'taken',
-          medicationId: medId, // Uses actual ID if found, else null
+          medicationId: medId,
         });
         await ctx.reply(`📊 Logged: ${parsed.parsedMessage || `Intake of ${parsed.medicationName}`}`);
         break;
@@ -79,10 +79,60 @@ async function handleUserIntent(ctx: Context, text: string) {
   }
 }
 
-// --- 2. INPUT LISTENERS ---
+// --- 2. CARETAKER MANAGEMENT ---
+
+bot.command('setcaretaker', (ctx) => {
+  ctx.reply("To add a caretaker, please click the button below and select them from your chat list:",
+    Markup.keyboard([
+      Markup.button.userRequest("👤 Select Caretaker", 1) // Request ID 1
+    ]).resize().oneTime()
+  );
+});
+
+// FIX: Listen to generic 'message' and manually check for 'user_shared' to bypass strict type checking
+bot.on('message', async (ctx, next) => {
+  const msg = ctx.message as any;
+
+  // Check if the message contains user_shared data
+  if (msg.user_shared) {
+    const patientId = ctx.from.id;
+    const caregiverId = msg.user_shared.user_id;
+
+    try {
+      // Upsert: Insert or Update if patient already exists
+      await db.db.insert(db.caregivers)
+        .values({
+          patientTelegramId: patientId,
+          caregiverTelegramId: caregiverId
+        })
+        .onConflictDoUpdate({
+          target: db.caregivers.patientTelegramId,
+          set: { caregiverTelegramId: caregiverId }
+        });
+
+      await ctx.reply("✅ Caretaker updated successfully! They will now receive alerts if you miss your medications.");
+    } catch (e) {
+      console.error("Caretaker add error:", e);
+      await ctx.reply("Failed to update caretaker. Please try again.");
+    }
+    // Stop propagation so it doesn't fall through to text/voice handlers
+    return;
+  }
+
+  // If it's not a user_shared message, continue to the next listener
+  return next();
+});
+
+// --- 3. INPUT LISTENERS ---
 
 bot.start((ctx) => {
-  ctx.reply("👵 Welcome to MediAid. You can send me text or voice messages to manage your medications.", 
+  ctx.reply(`👵 Welcome to MediAid.
+    
+You can send me text or voice messages to manage your medications.
+
+Try saying 'Add 5mg Lisinopril at 8 AM' or 'I took my aspirin'.
+
+You can also set a caretaker with /setcaretaker.`, 
     Markup.keyboard([['My Schedule', 'I took my medicine']]).resize()
   );
 });
@@ -101,12 +151,9 @@ bot.on(message('voice'), async (ctx) => {
     const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' });
     
     fs.writeFileSync(ogaPath, Buffer.from(response.data));
-    // Convert OGA to MP3 for Whisper
     execSync(`ffmpeg -i "${ogaPath}" "${mp3Path}" -y`);
 
-    // ACTUAL IMPLEMENTATION: Call Groq Whisper STT
     const transcript = await transcribeAudio(mp3Path); 
-    
     await handleUserIntent(ctx, transcript);
   } catch (e) {
     console.error(e);
@@ -117,7 +164,7 @@ bot.on(message('voice'), async (ctx) => {
   }
 });
 
-// --- 3. MEDICATION REMINDERS (CRON) ---
+// --- 4. MEDICATION REMINDERS (MINUTE CRON) ---
 
 cron.schedule('* * * * *', async () => {
   const now = new Date();
@@ -137,7 +184,72 @@ cron.schedule('* * * * *', async () => {
   }
 });
 
-// --- 4. ADHERENCE LOGGING ---
+// --- 5. END OF DAY SUMMARY & MISSED LOGGING (DAILY CRON) ---
+
+cron.schedule('59 23 * * *', async () => {
+  console.log("Running End-of-Day Tasks...");
+  
+  // A. Mark unmarked responses as missed
+  const missedMeds = await db.db.select({
+      medicationId: db.medications.id,
+      telegramId: db.medications.telegramId,
+      name: db.medications.name
+    })
+    .from(db.medications)
+    .leftJoin(db.adherenceLogs, and(
+      eq(db.medications.id, db.adherenceLogs.medicationId),
+      sql`DATE(${db.adherenceLogs.timestamp}) = CURRENT_DATE`
+    ))
+    .where(isNull(db.adherenceLogs.id));
+
+  for (const m of missedMeds) {
+    await db.db.insert(db.adherenceLogs).values({
+      telegramId: m.telegramId,
+      medicationId: m.medicationId,
+      status: 'missed'
+    });
+  }
+
+  // B. Send Caretaker Summary
+  const allCaregiverLinks = await db.db.select().from(db.caregivers);
+
+  for (const link of allCaregiverLinks) {
+    const patientId = link.patientTelegramId;
+    const caregiverId = link.caregiverTelegramId;
+
+    if (!patientId || !caregiverId) continue;
+
+    const dailyLogs = await db.db.select({
+      medName: db.medications.name,
+      status: db.adherenceLogs.status,
+      time: db.medications.schedule
+    })
+    .from(db.adherenceLogs)
+    .innerJoin(db.medications, eq(db.adherenceLogs.medicationId, db.medications.id))
+    .where(and(
+      eq(db.adherenceLogs.telegramId, patientId),
+      sql`DATE(${db.adherenceLogs.timestamp}) = CURRENT_DATE`
+    ));
+
+    if (dailyLogs.length > 0) {
+      const summaryText = dailyLogs.map(log => {
+        const icon = log.status === 'taken' ? '✅' : '❌';
+        return `${icon} ${log.medName} (${log.time}): ${log.status.toUpperCase()}`;
+      }).join('\n');
+
+      try {
+        await bot.telegram.sendMessage(
+          caregiverId,
+          `📅 **Daily Medication Report**\n\nPatient ID: ${patientId}\n\n${summaryText}`
+        );
+      } catch (e) {
+        console.error(`Failed to send summary to caregiver ${caregiverId}`, e);
+      }
+    }
+  }
+});
+
+// --- 6. ADHERENCE LOGGING ACTIONS ---
 
 bot.action(/taken_(.+)/, async (ctx) => {
   const medId = parseInt(ctx.match[1]!);
@@ -164,7 +276,7 @@ bot.action(/missed_(.+)/, async (ctx) => {
   if (caregiver[0]) {
     await bot.telegram.sendMessage(
       caregiver[0].caregiverTelegramId!, 
-      `⚠️ ALERT: ${ctx.from?.first_name || 'The patient'} missed their medication (ID: ${medId}).`
+      `⚠️ ALERT: Patient missed their medication (ID: ${medId}).`
     );
   }
 

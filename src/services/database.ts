@@ -30,6 +30,6 @@ export const adherenceLogs = pgTable('adherence_logs', {
 // Caregivers: Links a patient to a caregiver for alerts
 export const caregivers = pgTable('caregivers', {
   id: serial('id').primaryKey(),
-  patientTelegramId: bigint('patient_id', { mode: 'number' }).unique(),
-  caregiverTelegramId: bigint('caregiver_id', { mode: 'number' }),
+  patientTelegramId: bigint('patient_id', { mode: 'number' }).unique().notNull(), // Unique ensures one caregiver per patient
+  caregiverTelegramId: bigint('caregiver_id', { mode: 'number' }).notNull(),
 });

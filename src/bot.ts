@@ -54,9 +54,10 @@ bot.action('missed_dose', async (ctx) => {
   const caregiver = await db.db.select().from(db.caregivers).where(eq(db.caregivers.patientTelegramId, patientId));
   
   if (caregiver[0]) {
-    bot.telegram.sendMessage(caregiver[0].caregiverTelegramId, `⚠️ ALERT: Patient ${ctx.from.first_name} has missed a dose!`);
+    bot.telegram.sendMessage(caregiver[0].caregiverTelegramId!, `⚠️ ALERT: Patient ${ctx.from.first_name} has missed a dose!`);
   }
   ctx.reply("I've notified your caregiver.");
 });
 
 bot.launch();
+console.log("MedAssist Bot is running...");

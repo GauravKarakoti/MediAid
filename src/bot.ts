@@ -9,9 +9,16 @@ import { parseMedCommand, transcribeAudio } from './services/groq-client.js';
 import * as db from './services/database.js';
 import { eq, and, ilike, sql, isNull } from 'drizzle-orm';
 import { fileURLToPath } from 'url';
+import express from 'express';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const bot = new Telegraf(process.env.BOT_TOKEN!);
+const app = express();
+const port = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+  res.send('MediAid Bot is running!');
+});
 
 async function handleUserIntent(ctx: Context, text: string) {
   const userId = ctx.from?.id;
@@ -395,3 +402,7 @@ console.log("🚀 MediAid Bot is running and monitoring schedules...");
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
+app.listen(port, () => {
+  console.log(`Web server running on port ${port}`);
+});

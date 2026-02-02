@@ -227,6 +227,30 @@ You can also set a caretaker with /setcaretaker.`,
   );
 });
 
+bot.help((ctx) => {
+  const helpMessage = `
+🛠️ **MediAid Bot Help**
+
+Here is how you can use the bot's features:
+
+📋 **Manage Medications**
+• **Add**: Say "Add 5mg Aspirin at 8 AM" or "Take 10mg Lisinopril every 2 days at 9 PM".
+• **Update**: Say "Change my Aspirin dosage to 10mg" or "Update Lisinopril time to 10 PM".
+• **Remove**: Say "Remove Aspirin" or "Stop taking Lisinopril".
+• **View Schedule**: Say "Show my schedule" or click the "My Schedule" button.
+
+📊 **Log Adherence**
+• **Log Intake**: Say "I took my medicine" or "I took my aspirin".
+• **Reminders**: When you get a reminder, click "✅ I've taken it" or "❌ I'll skip it".
+
+👤 **Caretakers**
+• **Set Caretaker**: Use /setcaretaker to select someone who will receive alerts if you miss a dose.
+
+🎤 **Tip**: You can also send a **voice message** instead of typing!
+  `;
+  ctx.replyWithMarkdown(helpMessage);
+});
+
 bot.on(message('text'), async (ctx) => {
   await handleUserIntent(ctx, ctx.message.text);
 });

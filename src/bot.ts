@@ -7,8 +7,7 @@ import { execSync } from 'child_process';
 import cron from 'node-cron';
 import { parseMedCommand, transcribeAudio, checkDosageSafety, analyzePrescription } from './services/groq-client.js';
 import * as db from './services/database.js';
-import { eq, and, ilike, sql, isNull, lt, gte, desc, isNotNull, lte } from 'drizzle-orm';
-import { fileURLToPath } from 'url';
+import { eq, and, ilike, sql, isNull, lt, gte, desc, isNotNull, lte, inArray } from 'drizzle-orm';import { fileURLToPath } from 'url';
 import express from 'express';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -186,22 +185,38 @@ async function handleUserIntent(ctx: Context, text: string) {
       
       case 'remove_medication':
         if (parsed.medicationName) {
+          // 1. Find the medications to delete
+          const medskq = await db.db.select()
+            .from(db.medications)
+            .where(
+              and(
+                eq(db.medications.telegramId, userId),
+                ilike(db.medications.name, `%${parsed.medicationName}%`)
+              )
+            );
+
+          if (medskq.length > 0) {
+            const medIds = medskq.map(m => m.id);
+
+            // 2. Delete related adherence logs first (Fixes the Foreign Key Error)
+            await db.db.delete(db.adherenceLogs)
+              .where(
+                inArray(db.adherenceLogs.medicationId, medIds)
+              );
+
+            // 3. Now safely delete the medications
             const deleted = await db.db.delete(db.medications)
-                .where(
-                    and(
-                        eq(db.medications.telegramId, userId),
-                        ilike(db.medications.name, `%${parsed.medicationName}%`)
-                    )
-                )
-                .returning();
-            
-            if (deleted.length > 0) {
-                await ctx.reply(`🗑️ Removed ${deleted.length} medication(s) matching "${parsed.medicationName}".`);
-            } else {
-                await ctx.reply(`⚠️ Could not find any medication named "${parsed.medicationName}" to remove.`);
-            }
+              .where(
+                inArray(db.medications.id, medIds)
+              )
+              .returning();
+
+            await ctx.reply(`🗑️ Removed ${deleted.length} medication(s) matching "${parsed.medicationName}" and their history.`);
+          } else {
+            await ctx.reply(`⚠️ Could not find any medication named "${parsed.medicationName}" to remove.`);
+          }
         } else {
-            await ctx.reply("Please specify which medication you want to remove.");
+          await ctx.reply("Please specify which medication you want to remove.");
         }
         break;
 

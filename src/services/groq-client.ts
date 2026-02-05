@@ -8,7 +8,7 @@ export const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export interface MedCommand {
   // Added 'query_missed' to the intent list
-  intent: 'add_medication' | 'log_intake' | 'query_schedule' | 'remove_medication' | 'update_medication' | 'general_conversation' | 'log_health' | 'add_appointment' | 'sos' | 'query_health' | 'query_appointments' | 'query_missed' | 'unknown';
+  intent: 'add_medication' | 'log_intake' | 'query_schedule' | 'remove_medication' | 'update_medication' | 'general_conversation' | 'log_health' | 'add_appointment' | 'sos' | 'query_health' | 'query_appointments' | 'query_missed' | 'update_appointment' | 'remove_appointment' | 'unknown';
   medicationName?: string;
   dosage?: string;
   time?: string;
@@ -48,6 +48,8 @@ Modes/Intents:
 10. "query_health": "Show my health logs".
 11. "query_appointments": "Show my appointments".
 12. "query_missed": "What did I miss?", "Did I forget any pills?", "Missed medicines".
+13. "update_appointment": "Change dentist to 4pm"
+14. "remove_appointment": "Cancel doctor visit"
 
 Return JSON structure: 
 { 
@@ -60,6 +62,7 @@ Return JSON structure:
   "healthType": string | null,
   "healthValue": string | null,
   "appointmentTitle": string | null,
+  "oldAppointmentTitle": string | null,
   "appointmentDate": string | null,
   "parsedMessage": string | null,
   "response": string | null

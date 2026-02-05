@@ -42,7 +42,16 @@ function parseFrequency(freq: any): number {
     return match ? parseInt(match[0]) : 1;
 }
 
-function parseTime(t: string): string {
+function inferTimeFromMedName(name: string): string {
+    const lower = name.toLowerCase();
+    if (lower.includes('sleep') || lower.includes('night') || lower.includes('bed') || lower.includes('ambien') || lower.includes('melatonin')) return "22:00";
+    if (lower.includes('morning') || lower.includes('thyroid') || lower.includes('vitamin')) return "08:00";
+    if (lower.includes('lunch') || lower.includes('afternoon')) return "13:00";
+    if (lower.includes('dinner') || lower.includes('evening')) return "19:00";
+    return "09:00"; // Final fallback
+}
+
+function parseTime(t: string | null | undefined, medName: string = ""): string {
     // If the LLM successfully inferred a time (e.g. "22:00"), trust it.
     if (t && t.match(/^\d{1,2}:\d{2}$/)) {
         return t.padStart(5, '0');
@@ -50,13 +59,7 @@ function parseTime(t: string): string {
     // Fallback logic if LLM failed (though prompt is now stronger)
     if (!t) return "09:00"; 
     
-    const lower = t.toLowerCase();
-    if (lower.includes('morn')) return "09:00";
-    if (lower.includes('after') || lower.includes('lunch')) return "13:00";
-    if (lower.includes('even')) return "18:00";
-    if (lower.includes('night') || lower.includes('bed')) return "21:00";
-    
-    return "09:00";
+    return inferTimeFromMedName(medName);
 }
 
 // Get current time string in IST (HH:MM)
@@ -144,15 +147,73 @@ async function handleUserIntent(ctx: Context, text: string) {
       }
 
       case 'add_appointment': {
-        if (parsed.appointmentDate && parsed.appointmentTitle) {
+        if (parsed.appointmentTitle) {
+            let dateObj: Date;
+
+            // Handle cases where only time is provided (e.g., "7:14pm")
+            if (parsed.appointmentDate && parsed.appointmentDate.match(/^\d{1,2}:\d{2}/)) {
+                const now = new Date();
+                // Create a date string for Today + Time
+                const timeStr = parsed.appointmentDate; // Expecting HH:MM or similar
+                const dateTimeStr = `${now.toDateString()} ${timeStr}`;
+                dateObj = new Date(dateTimeStr);
+                
+                // If that time has passed today, assume tomorrow
+                if (dateObj < now) {
+                    dateObj.setDate(dateObj.getDate() + 1);
+                }
+            } else if (parsed.appointmentDate) {
+                dateObj = new Date(parsed.appointmentDate);
+            } else {
+                // Fallback if no date/time found
+                return await ctx.reply("Please specify a date or time for the appointment.");
+            }
+
+            if (isNaN(dateObj.getTime())) {
+                return await ctx.reply("I understood the appointment title, but the date/time format was unclear.");
+            }
+
             await db.db.insert(db.appointments).values({
                 telegramId: userId,
                 title: parsed.appointmentTitle,
-                date: new Date(parsed.appointmentDate)
+                date: dateObj
             });
-            await ctx.reply(`🗓️ Appointment set: <b>${parsed.appointmentTitle}</b> on ${parsed.appointmentDate}`, { parse_mode: 'HTML' });
+            await ctx.reply(`🗓️ Appointment set: <b>${parsed.appointmentTitle}</b> on ${dateObj.toLocaleString('en-GB', { timeZone: 'Asia/Kolkata' })}`, { parse_mode: 'HTML' });
+        } else {
+            await ctx.reply("I need a title for the appointment (e.g., 'Dentist at 5pm').");
         }
         break;
+      }
+
+      case 'update_appointment': {        
+        if (!parsed.appointmentTitle) return await ctx.reply("Which appointment do you want to update?");
+
+        const updateData: any = {};
+        if (parsed.appointmentDate) updateData.date = new Date(parsed.appointmentDate);
+        // If user provided a new title, use it, otherwise keep old
+        // This logic depends heavily on how the LLM parses "Change X to Y". 
+        
+        // Simple implementation: Update based on fuzzy title match
+        const updatedAppt = await db.db.update(db.appointments)
+            .set(updateData)
+            .where(and(eq(db.appointments.telegramId, userId), ilike(db.appointments.title, `%${parsed.appointmentTitle}%`)))
+            .returning();
+
+        if (updatedAppt.length > 0) await ctx.reply(`✅ Updated appointment: <b>${updatedAppt[0]!.title}</b>`, { parse_mode: 'HTML' });
+        else await ctx.reply(`⚠️ Couldn't find an appointment matching "${parsed.appointmentTitle}".`);
+        break;
+      }
+
+      case 'remove_appointment': {
+          if (!parsed.appointmentTitle) return await ctx.reply("Which appointment should I cancel?");
+
+          const deletedAppt = await db.db.delete(db.appointments)
+              .where(and(eq(db.appointments.telegramId, userId), ilike(db.appointments.title, `%${parsed.appointmentTitle}%`)))
+              .returning();
+
+          if (deletedAppt.length > 0) await ctx.reply(`🗑️ Cancelled appointment: <b>${deletedAppt[0]!.title}</b>`, { parse_mode: 'HTML' });
+          else await ctx.reply(`⚠️ Couldn't find an appointment matching "${parsed.appointmentTitle}".`);
+          break;
       }
 
       case 'update_medication': {
@@ -222,11 +283,27 @@ async function handleUserIntent(ctx: Context, text: string) {
 
         let msg = "";
         if (meds.length > 0) {
-            msg += "💊 <b>Medication Schedule</b>\n";
-            msg += meds.map(m => {
-                const freq = m.frequency === 1 ? "Daily" : `Every ${m.frequency} days`;
-                return `• <b>${m.name}</b> (${m.dosage})\n  🕒 ${m.schedule} | 🔄 ${freq}`;
-            }).join('\n\n');
+          msg += "💊 <b>Medication Schedule</b>\n";
+          msg += meds.map(m => {
+              const freq = m.frequency === 1 ? "Daily" : `Every ${m.frequency} days`;
+              
+              // --- NEW LOGIC: REMAINING TIME ---
+              let remainingText = "";
+              if (m.endDate) {
+                  const now = new Date();
+                  const diffTime = m.endDate.getTime() - now.getTime();
+                  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                  
+                  if (diffDays > 0) {
+                      remainingText = ` | ⏳ ${diffDays} days left`;
+                  } else {
+                      remainingText = ` | ⚠️ Course ended`;
+                  }
+              }
+              // ---------------------------------
+
+              return `• <b>${m.name}</b> (${m.dosage})\n  🕒 ${m.schedule} | 🔄 ${freq}${remainingText}`;
+          }).join('\n\n');
         } else {
             msg += "💊 No medications scheduled.\n";
         }
@@ -301,7 +378,7 @@ async function addMedicationToDb(ctx: Context, userId: number, parsed: any) {
         endDate = d;
     }
     const freq = parseFrequency(parsed.frequencyDays);
-    const time = parseTime(parsed.time); // Uses inference logic
+    const time = parseTime(parsed.time, parsed.medicationName || "");
 
     await db.db.insert(db.medications).values({
         telegramId: userId,

@@ -2,12 +2,15 @@
 FROM node:20-slim
 
 # Install ffmpeg AND the tools required to build native addons
-# (build-essential includes 'make', 'g++', etc. python3 is also needed by node-gyp)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     build-essential \
     python3 \
+    tzdata \ 
     && rm -rf /var/lib/apt/lists/*
+
+# Set the Timezone to IST
+ENV TZ=Asia/Kolkata
 
 # Set the working directory in the container
 WORKDIR /usr/src/app

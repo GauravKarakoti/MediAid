@@ -7,8 +7,14 @@ import { execSync } from 'child_process';
 import cron from 'node-cron';
 import { parseMedCommand, transcribeAudio, checkDosageSafety, analyzePrescription } from './services/groq-client.js';
 import * as db from './services/database.js';
-import { eq, and, ilike, sql, isNull, lt, gte, desc, isNotNull, lte, inArray } from 'drizzle-orm';import { fileURLToPath } from 'url';
+import { eq, and, ilike, sql, isNull, lt, gte, desc, isNotNull, lte, inArray, notInArray } from 'drizzle-orm';
+import { fileURLToPath } from 'url';
 import express from 'express';
+
+// --- TIMEZONE CONFIGURATION ---
+// Ensure the process uses IST for Date operations where possible, 
+// though we will use explicit string formatting for critical checks.
+process.env.TZ = 'Asia/Kolkata'; 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const bot = new Telegraf(process.env.BOT_TOKEN!);
@@ -16,45 +22,52 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // Temporary storage
-const pendingConfirmations = new Map<number, any>(); // For prescriptions
-const pendingAdditions = new Map<number, any>();     // For unsafe medication confirmation
+const pendingConfirmations = new Map<number, any>();
+const pendingAdditions = new Map<number, any>();
 
 app.get('/', (req, res) => {
   res.send('MediAid Bot is running!');
 });
 
-// --- HELPER FUNCTIONS FOR CLEANING DATA ---
+// --- HELPER FUNCTIONS ---
 
 function parseFrequency(freq: any): number {
     if (typeof freq === 'number') return freq;
     if (!freq) return 1;
     const s = freq.toString().toLowerCase();
-    
-    // Map common words to numbers
-    if (s.includes('daily') || s.includes('every day') || s.includes('once a day')) return 1;
+    if (s.includes('daily') || s.includes('every day')) return 1;
     if (s.includes('other day') || s.includes('alternate')) return 2;
-    if (s.includes('weekly') || s.includes('once a week')) return 7;
-    
-    // Extract number if present (e.g. "Every 3 days")
+    if (s.includes('weekly')) return 7;
     const match = s.match(/(\d+)/);
     return match ? parseInt(match[0]) : 1;
 }
 
 function parseTime(t: string): string {
-    if (!t) return "09:00";
-    
-    // If it's already roughly HH:MM (e.g. "09:00" or "9:00")
-    if (t.match(/^\d{1,2}:\d{2}$/)) {
-        return t.padStart(5, '0'); // Ensure 09:00 format
+    // If the LLM successfully inferred a time (e.g. "22:00"), trust it.
+    if (t && t.match(/^\d{1,2}:\d{2}$/)) {
+        return t.padStart(5, '0');
     }
+    // Fallback logic if LLM failed (though prompt is now stronger)
+    if (!t) return "09:00"; 
     
     const lower = t.toLowerCase();
     if (lower.includes('morn')) return "09:00";
     if (lower.includes('after') || lower.includes('lunch')) return "13:00";
     if (lower.includes('even')) return "18:00";
-    if (lower.includes('night') || lower.includes('bed') || lower.includes('dinner')) return "21:00";
+    if (lower.includes('night') || lower.includes('bed')) return "21:00";
     
-    return "09:00"; // Default fallback
+    return "09:00";
+}
+
+// Get current time string in IST (HH:MM)
+function getISTTime(): string {
+    const now = new Date();
+    return now.toLocaleTimeString('en-GB', { 
+        hour: '2-digit', 
+        minute: '2-digit', 
+        hour12: false, 
+        timeZone: 'Asia/Kolkata' 
+    });
 }
 
 // ------------------------------------------
@@ -65,9 +78,8 @@ async function handleUserIntent(ctx: Context, text: string) {
 
   let userId = senderId;
   const patientLink = await db.db.select().from(db.caregivers).where(eq(db.caregivers.caregiverTelegramId, senderId)).limit(1);
-  
   if (patientLink.length > 0) {
-     userId = patientLink[0]!.patientTelegramId; // Caretaker acts for patient
+     userId = patientLink[0]!.patientTelegramId;
      await ctx.reply(`(Acting on behalf of patient ID: ${userId})`);
   }
 
@@ -78,38 +90,30 @@ async function handleUserIntent(ctx: Context, text: string) {
       case 'add_medication': {
         const medicationName = parsed.medicationName || 'Unknown Medication';
         
-        // 1. Check for duplicates
-        const existing = await db.db.select()
-          .from(db.medications)
-          .where(
-            and(
-              eq(db.medications.telegramId, userId),
-              ilike(db.medications.name, medicationName)
-            )
-          ).limit(1);
+        const existing = await db.db.select().from(db.medications)
+          .where(and(eq(db.medications.telegramId, userId), ilike(db.medications.name, medicationName)))
+          .limit(1);
 
         if (existing.length > 0) {
-          return await ctx.reply(`⚠️ You already have "${medicationName}" in your schedule. If you want to change it, say "Update ${medicationName}".`);
+          return await ctx.reply(`⚠️ You already have <b>${medicationName}</b> in your schedule.`, { parse_mode: 'HTML' });
         }
 
-        // 2. Safety Check & Confirmation Flow
         if (parsed.dosage) {
             const safety = await checkDosageSafety(medicationName, parsed.dosage);
             if (!safety.safe) {
-                // Store intent data temporarily
                 pendingAdditions.set(userId, parsed);
-                
                 return await ctx.reply(
-                    `⚠️ **SAFETY WARNING**: ${safety.warning}\n\nDo you still want to add this medication?`,
-                    Markup.inlineKeyboard([
-                        Markup.button.callback("✅ Yes, Add It", "confirm_unsafe_add"),
-                        Markup.button.callback("❌ No, Cancel", "cancel_unsafe_add")
-                    ])
+                    `🚫 <b>SAFETY WARNING</b>\n${safety.warning}\n\nDo you still want to add this?`,
+                    { 
+                        parse_mode: 'HTML',
+                        ...Markup.inlineKeyboard([
+                            Markup.button.callback("✅ Yes, Add It", "confirm_unsafe_add"),
+                            Markup.button.callback("❌ No, Cancel", "cancel_unsafe_add")
+                        ]) 
+                    }
                 );
             }
         }
-
-        // 3. Add Medication (Safe path)
         await addMedicationToDb(ctx, userId, parsed);
         break;
       }
@@ -117,8 +121,8 @@ async function handleUserIntent(ctx: Context, text: string) {
       case 'sos': {
         const link = await db.db.select().from(db.caregivers).where(eq(db.caregivers.patientTelegramId, userId)).limit(1);
         if (link.length > 0) {
-            await bot.telegram.sendMessage(link[0]!.caregiverTelegramId, `🆘 EMERGENCY: Patient ${userId} requested help!`);
-            await ctx.reply("🚨 SOS sent to your caretaker!");
+            await bot.telegram.sendMessage(link[0]!.caregiverTelegramId, `🚨 <b>SOS ALERT</b>\nPatient ${userId} needs help immediately!`, { parse_mode: 'HTML' });
+            await ctx.reply("🚨 <b>SOS sent to your caretaker!</b>", { parse_mode: 'HTML' });
         } else {
             await ctx.reply("⚠️ No caretaker set up.");
         }
@@ -132,7 +136,7 @@ async function handleUserIntent(ctx: Context, text: string) {
                 type: parsed.healthType,
                 value: parsed.healthValue
             });
-            await ctx.reply(`📈 Logged ${parsed.healthType}: ${parsed.healthValue}`);
+            await ctx.reply(`✅ Logged <b>${parsed.healthType}</b>: ${parsed.healthValue}`, { parse_mode: 'HTML' });
         } else {
             await ctx.reply("Please specify the value (e.g., 'BP is 120/80')");
         }
@@ -146,107 +150,58 @@ async function handleUserIntent(ctx: Context, text: string) {
                 title: parsed.appointmentTitle,
                 date: new Date(parsed.appointmentDate)
             });
-            await ctx.reply(`🗓️ Appointment set: ${parsed.appointmentTitle} on ${parsed.appointmentDate}`);
+            await ctx.reply(`🗓️ Appointment set: <b>${parsed.appointmentTitle}</b> on ${parsed.appointmentDate}`, { parse_mode: 'HTML' });
         }
         break;
       }
 
       case 'update_medication': {
-        if (!parsed.medicationName) {
-          return await ctx.reply("Please specify which medication you want to update.");
-        }
+        if (!parsed.medicationName) return await ctx.reply("Please specify the medication name.");
 
         const updateData: any = {};
         if (parsed.dosage) updateData.dosage = parsed.dosage;
-        if (parsed.time) updateData.schedule = parseTime(parsed.time || ''); // Use helper
+        if (parsed.time) updateData.schedule = parseTime(parsed.time);
         if (parsed.frequencyDays) updateData.frequency = parsed.frequencyDays;
-
-        if (Object.keys(updateData).length === 0) {
-          return await ctx.reply("What details would you like to update? (e.g., time, dosage)");
-        }
 
         const updated = await db.db.update(db.medications)
           .set(updateData)
-          .where(
-            and(
-              eq(db.medications.telegramId, userId),
-              ilike(db.medications.name, `%${parsed.medicationName}%`)
-            )
-          )
+          .where(and(eq(db.medications.telegramId, userId), ilike(db.medications.name, `%${parsed.medicationName}%`)))
           .returning();
 
-        if (updated.length > 0) {
-          await ctx.reply(`🔄 Updated ${parsed.medicationName} successfully.`);
-        } else {
-          await ctx.reply(`⚠️ I couldn't find "${parsed.medicationName}" to update.`);
-        }
+        if (updated.length > 0) await ctx.reply(`Hz Updated <b>${parsed.medicationName}</b> successfully.`, { parse_mode: 'HTML' });
+        else await ctx.reply(`⚠️ Couldn't find "${parsed.medicationName}".`);
         break;
       }
       
       case 'remove_medication':
         if (parsed.medicationName) {
-          // 1. Find the medications to delete
-          const medskq = await db.db.select()
-            .from(db.medications)
-            .where(
-              and(
-                eq(db.medications.telegramId, userId),
-                ilike(db.medications.name, `%${parsed.medicationName}%`)
-              )
-            );
+            const medskq = await db.db.select().from(db.medications)
+                .where(and(eq(db.medications.telegramId, userId), ilike(db.medications.name, `%${parsed.medicationName}%`)));
 
-          if (medskq.length > 0) {
-            const medIds = medskq.map(m => m.id);
-
-            // 2. Delete related adherence logs first (Fixes the Foreign Key Error)
-            await db.db.delete(db.adherenceLogs)
-              .where(
-                inArray(db.adherenceLogs.medicationId, medIds)
-              );
-
-            // 3. Now safely delete the medications
-            const deleted = await db.db.delete(db.medications)
-              .where(
-                inArray(db.medications.id, medIds)
-              )
-              .returning();
-
-            await ctx.reply(`🗑️ Removed ${deleted.length} medication(s) matching "${parsed.medicationName}" and their history.`);
-          } else {
-            await ctx.reply(`⚠️ Could not find any medication named "${parsed.medicationName}" to remove.`);
-          }
-        } else {
-          await ctx.reply("Please specify which medication you want to remove.");
+            if (medskq.length > 0) {
+                const medIds = medskq.map(m => m.id);
+                await db.db.delete(db.adherenceLogs).where(inArray(db.adherenceLogs.medicationId, medIds));
+                await db.db.delete(db.medications).where(inArray(db.medications.id, medIds));
+                await ctx.reply(`🗑️ Removed <b>${parsed.medicationName}</b>.`, { parse_mode: 'HTML' });
+            } else {
+                await ctx.reply(`⚠️ Could not find "${parsed.medicationName}".`);
+            }
         }
         break;
 
       case 'log_intake':
         let medId: number | null = null;
         if (parsed.medicationName) {
-            const existingMeds = await db.db.select()
-                .from(db.medications)
-                .where(
-                    and(
-                        eq(db.medications.telegramId, userId),
-                        ilike(db.medications.name, `%${parsed.medicationName}%`)
-                    )
-                )
+            const existing = await db.db.select().from(db.medications)
+                .where(and(eq(db.medications.telegramId, userId), ilike(db.medications.name, `%${parsed.medicationName}%`)))
                 .limit(1);
-            
-            if (existingMeds.length > 0) {
-                medId = existingMeds[0]!.id;
-            }
+            if (existing.length > 0) medId = existing[0]!.id;
         }
-
-        await db.db.insert(db.adherenceLogs).values({
-          telegramId: userId,
-          status: 'taken',
-          medicationId: medId,
-        });
-        await ctx.reply(`📊 Logged: ${parsed.parsedMessage || `Intake of ${parsed.medicationName}`}`);
+        await db.db.insert(db.adherenceLogs).values({ telegramId: userId, status: 'taken', medicationId: medId });
+        await ctx.reply(`✅ Logged intake: <b>${parsed.medicationName || 'Medicine'}</b>`, { parse_mode: 'HTML' });
         break;
 
-      case 'query_health': // Feature 5
+      case 'query_health':
         const logs = await db.db.select().from(db.healthLogs)
             .where(eq(db.healthLogs.telegramId, userId))
             .orderBy(desc(db.healthLogs.timestamp))
@@ -254,72 +209,90 @@ async function handleUserIntent(ctx: Context, text: string) {
         
         if (logs.length === 0) await ctx.reply("No health logs found.");
         else {
-            const msg = logs.map(l => `• ${l.type}: ${l.value} (${l.timestamp?.toLocaleDateString()})`).join('\n');
-            await ctx.reply(`🏥 **Recent Health Logs:**\n${msg}`);
+            const msg = logs.map(l => `❤️ <b>${l.type}</b>: ${l.value} <i>(${l.timestamp?.toLocaleDateString()})</i>`).join('\n');
+            await ctx.reply(`🏥 <b>Recent Health Logs</b>\n\n${msg}`, { parse_mode: 'HTML' });
         }
         break;
 
       case 'query_schedule':
         const meds = await db.db.select().from(db.medications).where(eq(db.medications.telegramId, userId));
-        
         const appts = await db.db.select().from(db.appointments)
             .where(and(eq(db.appointments.telegramId, userId), gte(db.appointments.date, new Date())))
             .orderBy(db.appointments.date);
 
         let msg = "";
-
         if (meds.length > 0) {
-            msg += "💊 **Medications:**\n";
+            msg += "💊 <b>Medication Schedule</b>\n";
             msg += meds.map(m => {
-                // FIXED: Showing frequency and completion date
                 const freq = m.frequency === 1 ? "Daily" : `Every ${m.frequency} days`;
-                const endDate = m.endDate ? m.endDate.toLocaleDateString() : "Ongoing";
-                
-                return `• ${m.name} (${m.dosage}) at ${m.schedule}\n  └ ${freq} | Ends: ${endDate}`;
-            }).join('\n');
+                return `• <b>${m.name}</b> (${m.dosage})\n  🕒 ${m.schedule} | 🔄 ${freq}`;
+            }).join('\n\n');
+        } else {
+            msg += "💊 No medications scheduled.\n";
         }
 
         if (appts.length > 0) {
-            msg += "\n\n🗓️ **Appointments:**\n";
-            msg += appts.map(a => `• ${a.title} on ${a.date.toLocaleDateString()} at ${a.date.toLocaleTimeString()}`).join('\n');
+            msg += "\n\n🗓️ <b>Upcoming Appointments</b>\n";
+            msg += appts.map(a => `• <b>${a.title}</b>\n  🕒 ${a.date.toLocaleDateString()} at ${a.date.toLocaleTimeString()}`).join('\n');
         }
 
-        if (!msg) msg = "Your schedule is empty.";
-        await ctx.reply(msg);
+        await ctx.reply(msg, { parse_mode: 'HTML' });
         break;
 
-      // NEW CASE: SEPARATE APPOINTMENT QUERY
       case 'query_appointments':
         const myAppts = await db.db.select().from(db.appointments)
             .where(and(eq(db.appointments.telegramId, userId), gte(db.appointments.date, new Date())))
             .orderBy(db.appointments.date);
             
-        if (myAppts.length === 0) {
-            await ctx.reply("No upcoming appointments found.");
+        if (myAppts.length === 0) await ctx.reply("No upcoming appointments.");
+        else {
+            const list = myAppts.map(a => `• <b>${a.title}</b> on ${a.date.toLocaleDateString()}`).join('\n');
+            await ctx.reply(`🗓️ <b>Upcoming Appointments</b>\n\n${list}`, { parse_mode: 'HTML' });
+        }
+        break;
+
+      // NEW FEATURE: Query Missed Meds
+      case 'query_missed':
+        const currentISTTime = getISTTime();
+        const todayMeds = await db.db.select().from(db.medications)
+            .where(and(
+                eq(db.medications.telegramId, userId),
+                lte(db.medications.schedule, currentISTTime) // Scheduled before now
+            ));
+
+        // Get logs for TODAY only
+        const todayLogs = await db.db.execute(sql`
+            SELECT medication_id FROM adherence_logs 
+            WHERE telegram_id = ${userId} 
+            AND status = 'taken' 
+            AND DATE(timestamp AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE
+        `);
+        
+        const takenIds = todayLogs.rows.map((r: any) => r.medication_id);
+        const missedMedsList = todayMeds.filter(m => !takenIds.includes(m.id));
+
+        if (missedMedsList.length === 0) {
+            await ctx.reply("✅ <b>Good job!</b> You haven't missed any medications so far today.", { parse_mode: 'HTML' });
         } else {
-            const list = myAppts.map(a => `• ${a.title} on ${a.date.toLocaleDateString()} at ${a.date.toLocaleTimeString()}`).join('\n');
-            await ctx.reply(`🗓️ **Upcoming Appointments:**\n${list}`);
+            const missedText = missedMedsList.map(m => `• <b>${m.name}</b> (Scheduled: ${m.schedule})`).join('\n');
+            await ctx.reply(`⚠️ <b>Missed Medications Today:</b>\n\n${missedText}`, { parse_mode: 'HTML' });
         }
         break;
       
       case 'general_conversation':
-        if (parsed.response) {
-            await ctx.reply(parsed.response);
-        } else {
-            await ctx.reply("I'm here! How can I help you with your medications today?");
-        }
+        if (parsed.response) await ctx.reply(parsed.response);
+        else await ctx.reply("How can I help with your meds today?");
         break;
 
       default:
-        await ctx.reply(parsed.parsedMessage || "I'm here to help with your meds.");
+        await ctx.reply("I didn't quite catch that. Try saying 'Add Aspirin at 9am'.");
     }
   } catch (error) {
-    console.error("Intent Error:", error);
-    await ctx.reply("I had trouble understanding that. Could you try again?");
+    console.error(error);
+    await ctx.reply("Something went wrong. Please try again.");
   }
 }
 
-// Helper function to insert medication
 async function addMedicationToDb(ctx: Context, userId: number, parsed: any) {
     let endDate = null;
     if (parsed.durationDays) {
@@ -327,9 +300,8 @@ async function addMedicationToDb(ctx: Context, userId: number, parsed: any) {
         d.setDate(d.getDate() + parsed.durationDays);
         endDate = d;
     }
-
     const freq = parseFrequency(parsed.frequencyDays);
-    const time = parseTime(parsed.time || '');
+    const time = parseTime(parsed.time); // Uses inference logic
 
     await db.db.insert(db.medications).values({
         telegramId: userId,
@@ -340,8 +312,7 @@ async function addMedicationToDb(ctx: Context, userId: number, parsed: any) {
         endDate: endDate
     });
     
-    const freqText = (freq === 1) ? 'daily' : `every ${freq} days`;
-    await ctx.reply(`✅ Added ${parsed.medicationName} for ${parsed.durationDays ? parsed.durationDays + ' days' : 'ongoing'} at ${time} (${freqText}).`);
+    await ctx.reply(`✅ Added <b>${parsed.medicationName}</b>\n🕒 Time: ${time}\n🔄 Freq: ${freq === 1 ? 'Daily' : 'Every ' + freq + ' days'}`, { parse_mode: 'HTML' });
 }
 
 // --- Safety Confirmation Actions ---
@@ -588,42 +559,41 @@ cron.schedule('0 9 * * 0', async () => {
 
 cron.schedule('* * * * *', async () => {
     const now = new Date();
-    const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    // Force IST time string
+    const currentTime = now.toLocaleTimeString('en-GB', { 
+        hour: '2-digit', 
+        minute: '2-digit', 
+        hour12: false, 
+        timeZone: 'Asia/Kolkata' 
+    });
 
     // 1. Regular Schedule Check
     const dueMeds = await db.db.select().from(db.medications).where(eq(db.medications.schedule, currentTime));
     
-    // 2. Snooze Check (Meds where snoozedUntil is passed)
+    // 2. Snooze Check (Simple comparison assumes server time for snoozing, which is okay for relative delays)
     const snoozedMeds = await db.db.select().from(db.medications)
         .where(and(isNotNull(db.medications.snoozedUntil), lte(db.medications.snoozedUntil, now)));
 
     const allDue = [...dueMeds, ...snoozedMeds];
 
     for (const med of allDue) {
-        // If it was a snooze, clear the snooze flag
         if (med.snoozedUntil) {
             await db.db.update(db.medications).set({ snoozedUntil: null }).where(eq(db.medications.id, med.id));
-        } else {
-          if (med.frequency && med.frequency > 1) {
-            const createdDate = new Date(med.createdAt || now);
-            const start = new Date(createdDate.setHours(0,0,0,0));
-            const current = new Date(now.setHours(0,0,0,0));
-            const diffTime = Math.abs(current.getTime() - start.getTime());
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-            if (diffDays % med.frequency !== 0) continue;
-          }
         }
-
+        
         await bot.telegram.sendMessage(
-                med.telegramId, 
-                `⏰ REMINDER: Take ${med.name} (${med.dosage})!`,
-                Markup.inlineKeyboard([
+            med.telegramId, 
+            `⏰ <b>It's time for your medication!</b>\n\nTake: <b>${med.name}</b> (${med.dosage})`,
+            {
+                parse_mode: 'HTML',
+                ...Markup.inlineKeyboard([
                     [Markup.button.callback("✅ Taken", `taken_${med.id}`)],
                     [Markup.button.callback("❌ Skip", `missed_${med.id}`)],
                     [Markup.button.callback("💤 Snooze 10m", `snooze_${med.id}`)]
                 ])
-            );
-        }
+            }
+        );
+    }
 });
 
 // 3. Appointment Reminders (Hourly)

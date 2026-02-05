@@ -458,7 +458,7 @@ I am your personal health assistant. You can talk to me via text or voice!
 🚨 **Emergency**
 • Say **"Help me"** or **"SOS"** to immediately alert your caretaker.
   `;
-  ctx.reply(helpMessage, { parse_mode: 'HTML' });
+  ctx.reply(helpMessage, { parse_mode: 'Markdown' });
 });
 
 // --- Safety Confirmation Actions ---

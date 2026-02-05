@@ -260,14 +260,40 @@ async function handleUserIntent(ctx: Context, text: string) {
 
       case 'log_intake':
         let medId: number | null = null;
+        let loggedName = parsed.medicationName || 'Medicine';
+
         if (parsed.medicationName) {
-            const existing = await db.db.select().from(db.medications)
+            // 1. Try exact/fuzzy match
+            let existing = await db.db.select().from(db.medications)
                 .where(and(eq(db.medications.telegramId, userId), ilike(db.medications.name, `%${parsed.medicationName}%`)))
                 .limit(1);
-            if (existing.length > 0) medId = existing[0]!.id;
+            
+            // 2. Fallback: If no match, try checking if the scheduled name is inside the user input (reverse search)
+            if (existing.length === 0) {
+                 const allMeds = await db.db.select().from(db.medications).where(eq(db.medications.telegramId, userId));
+                 const match = allMeds.find(m => parsed.medicationName!.toLowerCase().includes(m.name.toLowerCase()));
+                 if (match) existing = [match];
+            }
+
+            if (existing.length > 0) {
+                medId = existing[0]!.id;
+                loggedName = existing[0]!.name; // Use the official DB name
+            }
         }
-        await db.db.insert(db.adherenceLogs).values({ telegramId: userId, status: 'taken', medicationId: medId });
-        await ctx.reply(`✅ Logged intake: <b>${parsed.medicationName || 'Medicine'}</b>`, { parse_mode: 'HTML' });
+
+        // Insert log
+        await db.db.insert(db.adherenceLogs).values({ 
+            telegramId: userId, 
+            status: 'taken', 
+            medicationId: medId 
+        });
+
+        if (medId) {
+            await ctx.reply(`✅ Logged intake: <b>${loggedName}</b>`, { parse_mode: 'HTML' });
+        } else {
+            // Warn if we logged it but couldn't link it to a schedule
+            await ctx.reply(`✅ Logged intake for <b>${parsed.medicationName}</b>, but I couldn't match it to your schedule. Please ensure the name matches exactly next time.`, { parse_mode: 'HTML' });
+        }
         break;
 
       case 'query_health':
@@ -336,7 +362,6 @@ async function handleUserIntent(ctx: Context, text: string) {
         }
         break;
 
-      // NEW FEATURE: Query Missed Meds
       case 'query_missed':
         const currentISTTime = getISTTime();
         const todayMeds = await db.db.select().from(db.medications)
@@ -345,12 +370,12 @@ async function handleUserIntent(ctx: Context, text: string) {
                 lte(db.medications.schedule, currentISTTime) // Scheduled before now
             ));
 
-        // Get logs for TODAY only
+        // FIX: Compare DATE(IST_Timestamp) with DATE(IST_Current_Time)
         const todayLogs = await db.db.execute(sql`
             SELECT medication_id FROM adherence_logs 
             WHERE telegram_id = ${userId} 
             AND status = 'taken' 
-            AND DATE(timestamp AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE
+            AND DATE(timestamp AT TIME ZONE 'Asia/Kolkata') = DATE(NOW() AT TIME ZONE 'Asia/Kolkata')
         `);
         
         const takenIds = todayLogs.rows.map((r: any) => r.medication_id);

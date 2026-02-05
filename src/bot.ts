@@ -678,21 +678,24 @@ cron.schedule('* * * * *', async () => {
     }
 });
 
-// 3. Appointment Reminders (Hourly)
-cron.schedule('0 * * * *', async () => {
+cron.schedule('* * * * *', async () => {   // <--- CHANGED from '0 * * * *'
     const now = new Date();
-    const tomorrow = new Date(now);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    // Look for appointments within the next 24 hours OR slightly in the past (e.g. last 5 mins)
+    // This ensures if the cron runs at 2:01 for a 2:00 appt, it still catches it.
+    
+    // We remove the 'gte(now)' restriction or widen it to catch recent misses
+    const lookbackWindow = new Date(now.getTime() - 15 * 60000); // 15 mins ago
+    const lookaheadWindow = new Date(now.getTime() + 24 * 60 * 60000); // 24 hours ahead
 
     const upcoming = await db.db.select().from(db.appointments)
         .where(and(
-            lt(db.appointments.date, tomorrow),
-            gte(db.appointments.date, now),
+            lt(db.appointments.date, lookaheadWindow), // < Now + 24h
+            gte(db.appointments.date, lookbackWindow), // > 15 mins ago (catches slightly missed ones)
             eq(db.appointments.reminded, false)
         ));
 
     for (const appt of upcoming) {
-        await bot.telegram.sendMessage(appt.telegramId, `mn🗓️ REMINDER: Appointment '${appt.title}' is coming up on ${appt.date}`);
+        await bot.telegram.sendMessage(appt.telegramId, `🗓️ REMINDER: Appointment '${appt.title}' is coming up on ${appt.date.toLocaleString('en-GB', { timeZone: 'Asia/Kolkata' })}`);
         await db.db.update(db.appointments).set({ reminded: true }).where(eq(db.appointments.id, appt.id));
     }
 });

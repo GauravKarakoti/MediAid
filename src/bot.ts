@@ -400,6 +400,42 @@ async function addMedicationToDb(ctx: Context, userId: number, parsed: any) {
     await ctx.reply(`✅ Added <b>${parsed.medicationName}</b>\n🕒 Time: ${time}\n🔄 Freq: ${freq === 1 ? 'Daily' : 'Every ' + freq + ' days'}`, { parse_mode: 'HTML' });
 }
 
+bot.help((ctx) => {
+  const helpMessage = `
+🆘 **MediAid Help - How to Use**
+
+I am your personal health assistant. You can talk to me via text or voice!
+
+💊 **Medications**
+• **Add:** "Add 5mg Aspirin daily at 9 AM"
+• **Log Intake:** "I took my Aspirin" or click the "Taken" button on reminders.
+• **Remove:** "Stop my Aspirin medication"
+• **Check Schedule:** "What is my routine?" or type "My Schedule"
+• **Missed Meds:** "Did I forget any pills today?"
+
+🗓️ **Appointments**
+• **Set:** "Dentist appointment on Feb 20 at 2 PM"
+• **Update:** "Change my dentist appointment to 4 PM"
+• **Cancel:** "Cancel my doctor visit"
+• **View:** "Show my appointments"
+
+❤️ **Health Tracking**
+• **Log Vitals:** "My BP is 120/80" or "Weight is 75kg"
+• **View History:** "Show my health logs"
+
+📁 **Prescription Scan**
+• Send me a **photo of your prescription**, and I will automatically parse and add the medications to your schedule.
+
+👤 **Caretaker Setup**
+• **/setcaretaker** - Choose someone to receive alerts if you miss a dose or send an SOS.
+• **/becomecaretaker** - Request to manage a patient's health.
+
+🚨 **Emergency**
+• Say **"Help me"** or **"SOS"** to immediately alert your caretaker.
+  `;
+  ctx.reply(helpMessage, { parse_mode: 'HTML' });
+});
+
 // --- Safety Confirmation Actions ---
 
 bot.action("confirm_unsafe_add", async (ctx) => {
@@ -542,10 +578,9 @@ bot.on('message', async (ctx, next) => {
     return next();
 });
 
-// --- Standard Inputs ---
-
 bot.start((ctx) => {
-  ctx.reply(`👵 Welcome to MediAid.\nTry saying 'Add 5mg Lisinopril at 8 AM' or 'I took my aspirin'.`, 
+  ctx.reply(
+    `👵 Welcome to MediAid.\nTry saying 'Add 5mg Lisinopril at 8 AM' or 'I took my medicine'.\n\nType /help at any time to see everything I can do.`, 
     Markup.keyboard([['My Schedule', 'I took my medicine']]).resize()
   );
 });
@@ -787,6 +822,14 @@ bot.action(/accept_care_(.+)/, async (ctx) => {
 });
 
 bot.launch();
+bot.telegram.setMyCommands([
+  { command: 'help', description: 'Show usage guide' },
+  { command: 'setcaretaker', description: 'Setup a caretaker' },
+  { command: 'becomecaretaker', description: 'Become a caretaker' },
+  { command: 'schedule', description: 'View or manage your schedule' },
+  { command: 'appointments', description: 'View or manage your appointments' },
+  { command: 'health_measurements', description: 'View or manage your health measurements' },
+]);
 console.log("🚀 MediAid Bot is running...");
 
 process.once('SIGINT', () => bot.stop('SIGINT'));

@@ -148,26 +148,31 @@ async function handleUserIntent(ctx: Context, text: string) {
 
       case 'add_appointment': {
         if (parsed.appointmentTitle) {
-            let dateObj: Date;
+          let dateObj: Date;
+          const now = new Date();
+          const dateStr = parsed.appointmentDate || "";
 
-            // Handle cases where only time is provided (e.g., "7:14pm")
-            if (parsed.appointmentDate && parsed.appointmentDate.match(/^\d{1,2}:\d{2}/)) {
-                const now = new Date();
-                // Create a date string for Today + Time
-                const timeStr = parsed.appointmentDate; // Expecting HH:MM or similar
-                const dateTimeStr = `${now.toDateString()} ${timeStr}`;
-                dateObj = new Date(dateTimeStr);
-                
-                // If that time has passed today, assume tomorrow
-                if (dateObj < now) {
-                    dateObj.setDate(dateObj.getDate() + 1);
-                }
-            } else if (parsed.appointmentDate) {
-                dateObj = new Date(parsed.appointmentDate);
-            } else {
-                // Fallback if no date/time found
-                return await ctx.reply("Please specify a date or time for the appointment.");
-            }
+          // 1. Check for time-only strings (e.g., "19:33" or "7:33pm")
+          if (dateStr.match(/^\d{1,2}:\d{2}/) || dateStr.toLowerCase().includes('pm') || dateStr.toLowerCase().includes('am')) {
+              const datePart = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+              dateObj = new Date(`${datePart} ${dateStr} GMT+0530`);
+              
+              if (dateObj < now) {
+                  dateObj.setDate(dateObj.getDate() + 1);
+              }
+          } 
+          // 2. Check for full ISO/Date-Time strings (e.g., "2026-02-05 19:33")
+          else if (dateStr.includes(' ') || dateStr.includes('T')) {
+              // Append IST offset if no timezone is present in the string
+              const tzSafeStr = dateStr.match(/[Z+-]/) ? dateStr : `${dateStr} GMT+0530`;
+              dateObj = new Date(tzSafeStr);
+          }
+          // 3. Fallback for date-only strings (e.g., "2026-02-05")
+          else if (dateStr) {
+              dateObj = new Date(`${dateStr} 00:00:00 GMT+0530`);
+          } else {
+              return await ctx.reply("Please specify a date or time for the appointment.");
+          }
 
             if (isNaN(dateObj.getTime())) {
                 return await ctx.reply("I understood the appointment title, but the date/time format was unclear.");

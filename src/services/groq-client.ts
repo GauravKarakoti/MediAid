@@ -44,6 +44,9 @@ Modes/Intents:
 6. "general_conversation": Friendly chat.
 7. "log_health": "BP is 120/80".
 8. "add_appointment": "Doctor on Feb 20 at 2pm".
+   - EXTRACT "appointmentDate" in strict format: "YYYY-MM-DD HH:mm".
+   - If time is missing, default to "09:00".
+   - Example: "Feb 20 at 2pm" -> "2026-02-20 14:00".
 9. "sos": "Help me", "Call caretaker".
 10. "query_health": "Show my health logs".
 11. "query_appointments": "Show my appointments".

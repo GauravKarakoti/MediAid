@@ -328,7 +328,7 @@ async function handleUserIntent(ctx: Context, text: string) {
             
         if (myAppts.length === 0) await ctx.reply("No upcoming appointments.");
         else {
-            const list = myAppts.map(a => `• <b>${a.title}</b> on ${a.date.toLocaleDateString()}`).join('\n');
+            const list = myAppts.map(a => `• <b>${a.title}</b> on ${a.date.toLocaleDateString()} ${a.date.toLocaleTimeString()}`).join('\n');
             await ctx.reply(`🗓️ <b>Upcoming Appointments</b>\n\n${list}`, { parse_mode: 'HTML' });
         }
         break;

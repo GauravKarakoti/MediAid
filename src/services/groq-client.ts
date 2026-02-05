@@ -47,7 +47,7 @@ Modes/Intents:
    - EXTRACT "appointmentDate" in strict format: "YYYY-MM-DD HH:mm".
    - If time is missing, default to "09:00".
    - Example: "Feb 20 at 2pm" -> "2026-02-20 14:00".
-9. "sos": "Help me", "Call caretaker".
+9. "sos": "Help me", "Message caretaker".
 10. "query_health": "Show my health logs".
 11. "query_appointments": "Show my appointments".
 12. "query_missed": "What did I miss?", "Did I forget any pills?", "Missed medicines".

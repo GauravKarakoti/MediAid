@@ -237,7 +237,7 @@ async function handleUserIntent(ctx: Context, text: string) {
           .where(and(eq(db.medications.telegramId, userId), ilike(db.medications.name, `%${parsed.medicationName}%`)))
           .returning();
 
-        if (updated.length > 0) await ctx.reply(`Hz Updated <b>${parsed.medicationName}</b> successfully.`, { parse_mode: 'HTML' });
+        if (updated.length > 0) await ctx.reply(`Updated <b>${parsed.medicationName}</b> successfully.`, { parse_mode: 'HTML' });
         else await ctx.reply(`⚠️ Couldn't find "${parsed.medicationName}".`);
         break;
       }
@@ -772,7 +772,7 @@ bot.action(/taken_(.+)/, async (ctx) => {
     // Feature 7: Show SOS button after taking medicine
     await ctx.editMessageText(`✅ Intake logged.`, 
         Markup.inlineKeyboard([
-            Markup.button.callback("🆘 Send SOS (Call Caretaker)", "sos_trigger")
+            Markup.button.callback("🆘 Send SOS (Message Caretaker)", "sos_trigger")
         ])
     );
 });

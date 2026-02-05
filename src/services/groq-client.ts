@@ -7,7 +7,8 @@ dotenv.config();
 export const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export interface MedCommand {
-  intent: 'add_medication' | 'log_intake' | 'query_schedule' | 'remove_medication' | 'update_medication' | 'general_conversation' | 'log_health' | 'add_appointment' | 'sos' | 'query_health' | 'unknown';
+  // Added 'query_appointments' to the intent list
+  intent: 'add_medication' | 'log_intake' | 'query_schedule' | 'remove_medication' | 'update_medication' | 'general_conversation' | 'log_health' | 'add_appointment' | 'sos' | 'query_health' | 'query_appointments' | 'unknown';
   medicationName?: string;
   dosage?: string;
   time?: string;
@@ -21,7 +22,7 @@ export interface MedCommand {
   appointmentDate?: string;
 }
 
-// MERGED SYSTEM PROMPT: Covers all functionalities
+// MERGED SYSTEM PROMPT: Updated with Time Inference and query_appointments
 const systemPrompt = `
 You are MediAid, a voice aide for elderly medication adherence.
 Parse inputs into JSON.
@@ -32,14 +33,16 @@ Modes/Intents:
 2. "add_medication": New regimen (e.g., "Take 5mg of Lisinopril every 2 days at 9am").
    - Extract "frequencyDays" as an integer (e.g., "daily" -> 1, "every 2 days" -> 2). Default is 1.
    - Extract "durationDays" if mentioned (e.g., "for 7 days").
+   - TIME INFERENCE: If time is NOT provided, INFER it based on the medication name (e.g., "Ambien/Sleep" -> "22:00", "Vitamin/Morning" -> "09:00", "After lunch" -> "14:00"). Do not default to null if it can be inferred.
 3. "remove_medication": User wants to stop a med (e.g., "Stop taking Aspirin").
-4. "query_schedule": Asking what to take OR what appointments are coming up.
+4. "query_schedule": Asking for "schedule", "routine", or "what do I take". (Shows both meds and appointments).
 5. "update_medication": Change an existing medication's details.
 6. "general_conversation": The user is engaging in normal conversation. Generate a friendly "response".
 7. "log_health": "BP is 120/80" -> { intent: "log_health", healthType: "BP", healthValue: "120/80" }
 8. "add_appointment": "Doctor on Feb 20 at 2pm" -> { intent: "add_appointment", appointmentTitle: "Doctor", appointmentDate: "ISO_DATE_STRING" }
 9. "sos": "Help me", "Call caretaker" -> { intent: "sos" }
 10. "query_health": "Show my health logs", "What was my last BP?" -> { intent: "query_health" }
+11. "query_appointments": "Show my appointments", "When is the doctor?", "Do I have any visits?" -> { intent: "query_appointments" }
 
 Return JSON structure: 
 { 

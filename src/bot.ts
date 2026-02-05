@@ -147,7 +147,7 @@ async function handleUserIntent(ctx: Context, text: string) {
                 title: parsed.appointmentTitle,
                 date: new Date(parsed.appointmentDate)
             });
-            await ctx.reply(`mn🗓️ Appointment set: ${parsed.appointmentTitle} on ${parsed.appointmentDate}`);
+            await ctx.reply(`🗓️ Appointment set: ${parsed.appointmentTitle} on ${parsed.appointmentDate}`);
         }
         break;
       }
@@ -245,10 +245,8 @@ async function handleUserIntent(ctx: Context, text: string) {
         break;
 
       case 'query_schedule':
-        // 1. Fetch Medications
         const meds = await db.db.select().from(db.medications).where(eq(db.medications.telegramId, userId));
         
-        // 2. Fetch Appointments (Feature 8)
         const appts = await db.db.select().from(db.appointments)
             .where(and(eq(db.appointments.telegramId, userId), gte(db.appointments.date, new Date())))
             .orderBy(db.appointments.date);
@@ -258,13 +256,11 @@ async function handleUserIntent(ctx: Context, text: string) {
         if (meds.length > 0) {
             msg += "💊 **Medications:**\n";
             msg += meds.map(m => {
-                // Feature 9: Time left calculation
-                let timeLeft = "";
-                if (m.endDate) {
-                    const daysLeft = Math.ceil((m.endDate.getTime() - Date.now()) / (1000 * 3600 * 24));
-                    timeLeft = daysLeft > 0 ? ` (${daysLeft} days left)` : " (Last day)";
-                }
-                return `• ${m.name} - ${m.dosage} at ${m.schedule}${timeLeft}`;
+                // FIXED: Showing frequency and completion date
+                const freq = m.frequency === 1 ? "Daily" : `Every ${m.frequency} days`;
+                const endDate = m.endDate ? m.endDate.toLocaleDateString() : "Ongoing";
+                
+                return `• ${m.name} (${m.dosage}) at ${m.schedule}\n  └ ${freq} | Ends: ${endDate}`;
             }).join('\n');
         }
 
@@ -275,6 +271,20 @@ async function handleUserIntent(ctx: Context, text: string) {
 
         if (!msg) msg = "Your schedule is empty.";
         await ctx.reply(msg);
+        break;
+
+      // NEW CASE: SEPARATE APPOINTMENT QUERY
+      case 'query_appointments':
+        const myAppts = await db.db.select().from(db.appointments)
+            .where(and(eq(db.appointments.telegramId, userId), gte(db.appointments.date, new Date())))
+            .orderBy(db.appointments.date);
+            
+        if (myAppts.length === 0) {
+            await ctx.reply("No upcoming appointments found.");
+        } else {
+            const list = myAppts.map(a => `• ${a.title} on ${a.date.toLocaleDateString()} at ${a.date.toLocaleTimeString()}`).join('\n');
+            await ctx.reply(`🗓️ **Upcoming Appointments:**\n${list}`);
+        }
         break;
       
       case 'general_conversation':

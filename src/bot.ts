@@ -195,10 +195,13 @@ async function handleUserIntent(ctx: Context, text: string) {
 
         const updateData: any = {};
         if (parsed.appointmentDate) updateData.date = new Date(parsed.appointmentDate);
-        // If user provided a new title, use it, otherwise keep old
-        // This logic depends heavily on how the LLM parses "Change X to Y". 
-        
-        // Simple implementation: Update based on fuzzy title match
+        // Add other potential fields here, like a new title if the LLM parses it
+
+        // --- FIX: Check if there is actually anything to update ---
+        if (Object.keys(updateData).length === 0) {
+            return await ctx.reply("I understood the appointment, but you didn't provide complete details (both time and date) to update.");
+        }
+
         const updatedAppt = await db.db.update(db.appointments)
             .set(updateData)
             .where(and(eq(db.appointments.telegramId, userId), ilike(db.appointments.title, `%${parsed.appointmentTitle}%`)))

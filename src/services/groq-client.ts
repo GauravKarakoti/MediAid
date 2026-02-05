@@ -7,7 +7,7 @@ dotenv.config();
 export const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export interface MedCommand {
-  intent: 'add_medication' | 'log_intake' | 'query_schedule' | 'remove_medication' | 'update_medication' | 'general_conversation' | 'log_health' | 'add_appointment' | 'sos' | 'unknown';
+  intent: 'add_medication' | 'log_intake' | 'query_schedule' | 'remove_medication' | 'update_medication' | 'general_conversation' | 'log_health' | 'add_appointment' | 'sos' | 'query_health' | 'unknown';
   medicationName?: string;
   dosage?: string;
   time?: string;
@@ -33,12 +33,13 @@ Modes/Intents:
    - Extract "frequencyDays" as an integer (e.g., "daily" -> 1, "every 2 days" -> 2). Default is 1.
    - Extract "durationDays" if mentioned (e.g., "for 7 days").
 3. "remove_medication": User wants to stop a med (e.g., "Stop taking Aspirin").
-4. "query_schedule": Asking what to take.
+4. "query_schedule": Asking what to take OR what appointments are coming up.
 5. "update_medication": Change an existing medication's details.
 6. "general_conversation": The user is engaging in normal conversation. Generate a friendly "response".
 7. "log_health": "BP is 120/80" -> { intent: "log_health", healthType: "BP", healthValue: "120/80" }
 8. "add_appointment": "Doctor on Feb 20 at 2pm" -> { intent: "add_appointment", appointmentTitle: "Doctor", appointmentDate: "ISO_DATE_STRING" }
 9. "sos": "Help me", "Call caretaker" -> { intent: "sos" }
+10. "query_health": "Show my health logs", "What was my last BP?" -> { intent: "query_health" }
 
 Return JSON structure: 
 { 
@@ -89,7 +90,6 @@ export async function checkDosageSafety(medName: string, dosage: string): Promis
   return JSON.parse(completion.choices[0]?.message.content || '{"safe":true}');
 }
 
-// --- Feature 2, 4, 5: Prescription Scan ---
 export async function analyzePrescription(imageBuffer: Buffer): Promise<any> {
     const completion = await groq.chat.completions.create({
         model: "meta-llama/llama-4-scout-17b-16e-instruct",
@@ -97,7 +97,22 @@ export async function analyzePrescription(imageBuffer: Buffer): Promise<any> {
             {
                 role: "user",
                 content: [
-                    { type: "text", text: "Analyze this image. 1. Is it a valid prescription? 2. Extract medications (name, dosage, frequency). 3. If timings aren't specified, suggest standard timings (e.g., morning/night). Return JSON: { isLegit: boolean, medications: [{name, dosage, time, frequency}], warning: string }" },
+                    { type: "text", text: `Analyze this prescription image. 
+                    1. STRICTLY Check if it is a legit prescription. If not, set isLegit: false.
+                    2. Extract medications: name, dosage, frequency (as number of days), duration (in days).
+                    3. TIME INFERENCE: If specific time is NOT provided, infer the best time based on the medicine (e.g., Sedatives -> 22:00, Diuretics -> 08:00, General -> 09:00).
+                    
+                    Return JSON: { 
+                        isLegit: boolean, 
+                        warning: string,
+                        medications: [{
+                            name: string, 
+                            dosage: string, 
+                            time: "HH:MM", 
+                            frequency: number, 
+                            durationDays: number 
+                        }] 
+                    }` },
                     { type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBuffer.toString('base64')}` } }
                 ]
             }

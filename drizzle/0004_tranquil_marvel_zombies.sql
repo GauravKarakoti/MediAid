@@ -1,0 +1,1 @@
+ALTER TABLE "medications" ADD COLUMN "snoozed_until" timestamp;

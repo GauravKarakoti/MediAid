@@ -7,7 +7,7 @@ import { execSync } from 'child_process';
 import cron from 'node-cron';
 import { parseMedCommand, transcribeAudio, checkDosageSafety, analyzePrescription } from './services/groq-client.js';
 import * as db from './services/database.js';
-import { eq, and, ilike, sql, isNull, lt, gte, desc } from 'drizzle-orm';
+import { eq, and, ilike, sql, isNull, lt, gte, desc, isNotNull, lte } from 'drizzle-orm';
 import { fileURLToPath } from 'url';
 import express from 'express';
 
@@ -231,17 +231,50 @@ async function handleUserIntent(ctx: Context, text: string) {
         await ctx.reply(`📊 Logged: ${parsed.parsedMessage || `Intake of ${parsed.medicationName}`}`);
         break;
 
-      case 'query_schedule':
-        const meds = await db.db.select().from(db.medications).where(eq(db.medications.telegramId, userId));
-        if (meds.length === 0) {
-          await ctx.reply("You don't have any medications scheduled.");
-        } else {
-          const list = meds.map(m => {
-            const freq = m.frequency === 1 ? 'Daily' : `Every ${m.frequency} days`;
-            return `• ${m.name} (${m.dosage}) at ${m.schedule} - ${freq}`;
-          }).join('\n');
-          await ctx.reply(`📋 Your Schedule:\n${list}`);
+      case 'query_health': // Feature 5
+        const logs = await db.db.select().from(db.healthLogs)
+            .where(eq(db.healthLogs.telegramId, userId))
+            .orderBy(desc(db.healthLogs.timestamp))
+            .limit(5);
+        
+        if (logs.length === 0) await ctx.reply("No health logs found.");
+        else {
+            const msg = logs.map(l => `• ${l.type}: ${l.value} (${l.timestamp?.toLocaleDateString()})`).join('\n');
+            await ctx.reply(`🏥 **Recent Health Logs:**\n${msg}`);
         }
+        break;
+
+      case 'query_schedule':
+        // 1. Fetch Medications
+        const meds = await db.db.select().from(db.medications).where(eq(db.medications.telegramId, userId));
+        
+        // 2. Fetch Appointments (Feature 8)
+        const appts = await db.db.select().from(db.appointments)
+            .where(and(eq(db.appointments.telegramId, userId), gte(db.appointments.date, new Date())))
+            .orderBy(db.appointments.date);
+
+        let msg = "";
+
+        if (meds.length > 0) {
+            msg += "💊 **Medications:**\n";
+            msg += meds.map(m => {
+                // Feature 9: Time left calculation
+                let timeLeft = "";
+                if (m.endDate) {
+                    const daysLeft = Math.ceil((m.endDate.getTime() - Date.now()) / (1000 * 3600 * 24));
+                    timeLeft = daysLeft > 0 ? ` (${daysLeft} days left)` : " (Last day)";
+                }
+                return `• ${m.name} - ${m.dosage} at ${m.schedule}${timeLeft}`;
+            }).join('\n');
+        }
+
+        if (appts.length > 0) {
+            msg += "\n\n🗓️ **Appointments:**\n";
+            msg += appts.map(a => `• ${a.title} on ${a.date.toLocaleDateString()} at ${a.date.toLocaleTimeString()}`).join('\n');
+        }
+
+        if (!msg) msg = "Your schedule is empty.";
+        await ctx.reply(msg);
         break;
       
       case 'general_conversation':
@@ -394,27 +427,38 @@ bot.command('setcaretaker', (ctx) => {
   );
 });
 
-bot.on('message', async (ctx, next) => {
-  const msg = ctx.message as any;
-  if (msg.user_shared) {
-    const patientId = ctx.from.id;
-    const caregiverId = msg.user_shared.user_id;
+bot.command('becomecaretaker', (ctx) => {
+    ctx.reply("To become a caretaker, please share the **Patient's Contact**:", 
+        Markup.keyboard([
+            Markup.button.userRequest("👤 Share Patient Contact", 2) // ID 2 for differentiation
+        ]).resize().oneTime()
+    );
+});
 
-    try {
-      await db.db.insert(db.caregivers)
-        .values({ patientTelegramId: patientId, caregiverTelegramId: caregiverId })
-        .onConflictDoUpdate({
-          target: db.caregivers.patientTelegramId,
-          set: { caregiverTelegramId: caregiverId }
-        });
-      await ctx.reply("✅ Caretaker updated successfully!");
-    } catch (e) {
-      console.error(e);
-      await ctx.reply("Failed to update caretaker.");
+bot.on('message', async (ctx, next) => {
+    const msg = ctx.message as any;
+    
+    // Check if this is the "Become Caretaker" flow (request_id 2)
+    if (msg.user_shared && msg.user_shared.request_id === 2) {
+        const caretakerId = ctx.from.id;
+        const patientId = msg.user_shared.user_id;
+
+        // Send request to Patient
+        try {
+            await bot.telegram.sendMessage(patientId, 
+                `👤 User ${ctx.from.first_name} wants to be your Caretaker.\nDo you accept?`,
+                Markup.inlineKeyboard([
+                    Markup.button.callback("✅ Accept", `accept_care_${caretakerId}`),
+                    Markup.button.callback("❌ Deny", `deny_care`)
+                ])
+            );
+            await ctx.reply("✅ Request sent to patient. Waiting for approval.");
+        } catch (e) {
+            await ctx.reply("⚠️ Could not reach patient. They must start this bot first.");
+        }
+        return;
     }
-    return;
-  }
-  return next();
+    return next();
 });
 
 // --- Standard Inputs ---
@@ -517,32 +561,44 @@ cron.schedule('0 9 * * 0', async () => {
     }
 });
 
-// 2. Minute Medication Check
 cron.schedule('* * * * *', async () => {
-  const now = new Date();
-  const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-  const dueMeds = await db.db.select().from(db.medications).where(eq(db.medications.schedule, currentTime));
+    const now = new Date();
+    const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
 
-  for (const med of dueMeds) {
-    if (med.frequency && med.frequency > 1) {
-      const createdDate = new Date(med.createdAt || now);
-      const start = new Date(createdDate.setHours(0,0,0,0));
-      const current = new Date(now.setHours(0,0,0,0));
-      const diffTime = Math.abs(current.getTime() - start.getTime());
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-      if (diffDays % med.frequency !== 0) continue;
-    }
+    // 1. Regular Schedule Check
+    const dueMeds = await db.db.select().from(db.medications).where(eq(db.medications.schedule, currentTime));
+    
+    // 2. Snooze Check (Meds where snoozedUntil is passed)
+    const snoozedMeds = await db.db.select().from(db.medications)
+        .where(and(isNotNull(db.medications.snoozedUntil), lte(db.medications.snoozedUntil, now)));
 
-    await bot.telegram.sendMessage(
-      med.telegramId, 
-      `⏰ REMINDER: Take ${med.name} (${med.dosage})!`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback("✅ Taken", `taken_${med.id}`)],
-        [Markup.button.callback("❌ Skip", `missed_${med.id}`)],
-        [Markup.button.callback("zkz💤 Snooze 10m", `snooze_${med.id}`)]
-      ])
-    );
-  }
+    const allDue = [...dueMeds, ...snoozedMeds];
+
+    for (const med of allDue) {
+        // If it was a snooze, clear the snooze flag
+        if (med.snoozedUntil) {
+            await db.db.update(db.medications).set({ snoozedUntil: null }).where(eq(db.medications.id, med.id));
+        } else {
+          if (med.frequency && med.frequency > 1) {
+            const createdDate = new Date(med.createdAt || now);
+            const start = new Date(createdDate.setHours(0,0,0,0));
+            const current = new Date(now.setHours(0,0,0,0));
+            const diffTime = Math.abs(current.getTime() - start.getTime());
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+            if (diffDays % med.frequency !== 0) continue;
+          }
+        }
+
+        await bot.telegram.sendMessage(
+                med.telegramId, 
+                `⏰ REMINDER: Take ${med.name} (${med.dosage})!`,
+                Markup.inlineKeyboard([
+                    [Markup.button.callback("✅ Taken", `taken_${med.id}`)],
+                    [Markup.button.callback("❌ Skip", `missed_${med.id}`)],
+                    [Markup.button.callback("💤 Snooze 10m", `snooze_${med.id}`)]
+                ])
+            );
+        }
 });
 
 // 3. Appointment Reminders (Hourly)
@@ -591,10 +647,21 @@ cron.schedule('59 23 * * *', async () => {
 // --- Action Listeners ---
 
 bot.action(/taken_(.+)/, async (ctx) => {
-  const medId = parseInt(ctx.match[1]!);
-  await db.db.insert(db.adherenceLogs).values({ telegramId: ctx.from!.id, medicationId: medId, status: 'taken' });
-  await ctx.answerCbQuery();
-  await ctx.editMessageText("✅ Intake logged.");
+    const medId = parseInt(ctx.match[1]!);
+    await db.db.insert(db.adherenceLogs).values({ telegramId: ctx.from!.id, medicationId: medId, status: 'taken' });
+    await ctx.answerCbQuery();
+    
+    // Feature 7: Show SOS button after taking medicine
+    await ctx.editMessageText(`✅ Intake logged.`, 
+        Markup.inlineKeyboard([
+            Markup.button.callback("🆘 Send SOS (Call Caretaker)", "sos_trigger")
+        ])
+    );
+});
+
+bot.action("sos_trigger", async (ctx) => {
+    // Re-use existing SOS logic
+    await handleUserIntent(ctx, "sos"); 
 });
 
 bot.action(/missed_(.+)/, async (ctx) => {
@@ -614,16 +681,26 @@ bot.action(/missed_(.+)/, async (ctx) => {
 
 bot.action(/snooze_(.+)/, async (ctx) => {
     const medId = parseInt(ctx.match[1] as string);
+    const snoozeTime = new Date(Date.now() + 10 * 60 * 1000); // 10 mins from now
+
+    await db.db.update(db.medications)
+        .set({ snoozedUntil: snoozeTime })
+        .where(eq(db.medications.id, medId));
+
     await ctx.answerCbQuery("Snoozed 10m");
-    await ctx.editMessageText("💤 Snoozed. Reminding in 10 mins.");
-    setTimeout(async () => {
-        const med = await db.db.select().from(db.medications).where(eq(db.medications.id, medId)).limit(1);
-        if (med.length > 0) {
-            await ctx.reply(`⏰ SNOOZE: Take ${med[0]!.name} now!`,
-                Markup.inlineKeyboard([[Markup.button.callback("✅ Taken", `taken_${medId}`)]])
-            );
-        }
-    }, 10 * 60 * 1000);
+    await ctx.editMessageText("💤 Snoozed. I'll remind you in 10 minutes.");
+});
+
+bot.action(/accept_care_(.+)/, async (ctx) => {
+    const caretakerId = parseInt(ctx.match[1]!);
+    const patientId = ctx.from.id;
+
+    await db.db.insert(db.caregivers)
+        .values({ patientTelegramId: patientId, caregiverTelegramId: caretakerId })
+        .onConflictDoUpdate({ target: db.caregivers.patientTelegramId, set: { caregiverTelegramId: caretakerId } });
+
+    await ctx.editMessageText("✅ Caretaker accepted!");
+    await bot.telegram.sendMessage(caretakerId, "✅ You are now the caretaker.");
 });
 
 bot.launch();

@@ -19,7 +19,8 @@ export const medications = pgTable('medications', {
   createdAt: timestamp('created_at').defaultNow(),
   reminderEnabled: boolean('reminder_enabled').default(true),
   // [NEW] Feature 10: Completion time/duration
-  endDate: timestamp('end_date'), 
+  endDate: timestamp('end_date'),
+  snoozedUntil: timestamp('snoozed_until'),
 });
 
 export const adherenceLogs = pgTable('adherence_logs', {
@@ -45,11 +46,10 @@ export const healthLogs = pgTable('health_logs', {
   timestamp: timestamp('timestamp').defaultNow(),
 });
 
-// --- [NEW] Feature 9: Appointments ---
 export const appointments = pgTable('appointments', {
   id: serial('id').primaryKey(),
   telegramId: bigint('telegram_id', { mode: 'number' }).notNull(),
-  title: text('title').notNull(), // e.g., "Dr. Smith Checkup"
+  title: text('title').notNull(),
   date: timestamp('date').notNull(),
   reminded: boolean('reminded').default(false),
 });

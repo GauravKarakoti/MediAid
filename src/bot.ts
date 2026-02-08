@@ -801,19 +801,15 @@ cron.schedule('* * * * *', async () => {
     const allMeds = await db.db.select().from(db.medications);
     
     for (const med of allMeds) {
-        // Fetch user's preferred timezone (default to IST)
         const userSettings = await db.db.select().from(db.users).where(eq(db.users.telegramId, med.telegramId)).limit(1);
         const userTz = userSettings[0]?.timezone || 'Asia/Kolkata';
 
-        // Check time in the user's specific timezone
         const userTimeNow = new Date().toLocaleTimeString('en-GB', { 
             hour: '2-digit', minute: '2-digit', hour12: false, timeZone: userTz 
         });
 
         if (med.schedule === userTimeNow) {
             let msg = `⏰ **MEDICATION REMINDER**\nTake: ${med.name} (${med.dosage})`;
-            
-            // Add custom notes to reminder
             if (med.notes) msg += `\n\n📝 **Note:** ${med.notes}`;
 
             const buttons = [
@@ -821,17 +817,30 @@ cron.schedule('* * * * *', async () => {
                 Markup.button.callback("❌ Skip", `missed_${med.id}`)
             ];
             
-            // Enforce "No Snooze" rule if specified in notes
             if (med.allowSnooze && !med.notes?.toLowerCase().includes("don't allow snooze")) {
                 buttons.push(Markup.button.callback("💤 Snooze 10m", `snooze_${med.id}`));
             }
 
-            // Send with sound/vibration (Alarm effect)
-            await bot.telegram.sendMessage(med.telegramId, msg, {
-                parse_mode: 'Markdown',
-                disable_notification: false, // Ensures sound plays
-                ...Markup.inlineKeyboard([buttons])
-            });
+            // --- ALARM MODIFICATION ---
+            // Send an actual audio file to act as the "ring"
+            try {
+                await bot.telegram.sendVoice(med.telegramId, 
+                    { source: './assets/alarm_sound.ogg' }, 
+                    {
+                        caption: msg,
+                        parse_mode: 'Markdown',
+                        disable_notification: false,
+                        ...Markup.inlineKeyboard([buttons])
+                    }
+                );
+            } catch (err) {
+                // Fallback to text if audio fails
+                await bot.telegram.sendMessage(med.telegramId, msg, {
+                    parse_mode: 'Markdown',
+                    disable_notification: false,
+                    ...Markup.inlineKeyboard([buttons])
+                });
+            }
         }
     }
 });

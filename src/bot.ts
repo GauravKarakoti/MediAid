@@ -5,9 +5,9 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import cron from 'node-cron';
-import { parseMedCommand, transcribeAudio, checkDosageSafety, analyzePrescription } from './services/groq-client.js';
+import { parseMedCommand, transcribeAudio, checkDosageSafety, analyzePrescription, analyzeLabReport, getHealthAwareResponse } from './services/groq-client.js';
 import * as db from './services/database.js';
-import { eq, and, ilike, sql, isNull, lt, gte, desc, isNotNull, lte, inArray, notInArray } from 'drizzle-orm';
+import { eq, and, ilike, sql, isNull, lt, gte, desc, isNotNull, lte, inArray } from 'drizzle-orm';
 import { fileURLToPath } from 'url';
 import express from 'express';
 
@@ -24,6 +24,7 @@ const port = process.env.PORT || 3000;
 // Temporary storage
 const pendingConfirmations = new Map<number, any>();
 const pendingAdditions = new Map<number, any>();
+const photoCache = new Map<string, string>();
 
 app.get('/', (req, res) => {
   res.send('MediAid Bot is running!');
@@ -73,9 +74,7 @@ function getISTTime(): string {
     });
 }
 
-// ------------------------------------------
-
-async function handleUserIntent(ctx: Context, text: string) {
+async function handleUserIntent(ctx: Context, text: string, command?: any) {
   const senderId = ctx.from?.id;
   if (!senderId) return;
 
@@ -87,7 +86,7 @@ async function handleUserIntent(ctx: Context, text: string) {
   }
 
   try {
-    const parsed = await parseMedCommand(text);
+    const parsed = command || await parseMedCommand(text);
 
     switch (parsed.intent) {
       case 'add_medication': {
@@ -419,10 +418,14 @@ async function addMedicationToDb(ctx: Context, userId: number, parsed: any) {
         dosage: parsed.dosage || 'As prescribed',
         schedule: time,
         frequency: freq,
-        endDate: endDate
+        endDate: endDate,
+        notes: parsed.notes || null,       // [NEW]
+        allowSnooze: parsed.allowSnooze ?? true // [NEW]
     });
     
-    await ctx.reply(`✅ Added <b>${parsed.medicationName}</b>\n🕒 Time: ${time}\n🔄 Freq: ${freq === 1 ? 'Daily' : 'Every ' + freq + ' days'}`, { parse_mode: 'HTML' });
+    let confirmMsg = `✅ Added <b>${parsed.medicationName}</b> at ${time}.`;
+    if (parsed.notes) confirmMsg += `\n📝 Note: ${parsed.notes}`;
+    await ctx.reply(confirmMsg, { parse_mode: 'HTML' });
 }
 
 bot.help((ctx) => {
@@ -497,10 +500,28 @@ bot.on(message('photo'), async (ctx) => {
     const photo = ctx.message.photo.pop();
     if (!photo) return;
     
-    await ctx.reply("🔍 Scanning prescription... please wait.");
+    // Store the mapping so we can retrieve the full file_id later
+    photoCache.set(photo.file_unique_id, photo.file_id);
     
+    await ctx.reply("What is this photo?", Markup.inlineKeyboard([
+        // Use file_unique_id here (it is much shorter)
+        [Markup.button.callback("💊 Prescription", `scan_presc_${photo.file_unique_id}`)],
+        [Markup.button.callback("🔬 Lab Report", `scan_lab_${photo.file_unique_id}`)]
+    ]));
+});
+
+bot.action(/scan_presc_(.+)/, async (ctx) => {
+    const uniqueId = ctx.match[1];
+    const fileId = photoCache.get(uniqueId as string);
+
+    if (!fileId) {
+        return await ctx.answerCbQuery("⚠️ Session expired or invalid photo.", { show_alert: true });
+    }
+
     try {
-        const fileLink = await ctx.telegram.getFileLink(photo.file_id);
+        await ctx.editMessageText("🔍 Scanning prescription... please wait.");
+        
+        const fileLink = await ctx.telegram.getFileLink(fileId);
         const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' });
         const buffer = Buffer.from(response.data);
 
@@ -510,48 +531,97 @@ bot.on(message('photo'), async (ctx) => {
             return await ctx.reply("⚠️ This does not look like a valid prescription. Please upload a clear photo.");
         }
 
-        let confirmMsg = "I found the following details. Is this correct?\n";
-        // Clean up the display message with parsed values so user sees what will actually be saved
+        let confirmMsg = "<b>Prescription Detected</b>\nIs this correct?\n";
         analysis.medications.forEach((m: any, i: number) => {
             const time = parseTime(m.time);
-            confirmMsg += `\n${i+1}. ${m.name} - ${m.dosage} at ${time}`;
+            confirmMsg += `\n${i+1}. 💊 ${m.name} - ${m.dosage} at ${time}`;
+            if (m.notes) confirmMsg += `\n   📝 <i>Note: ${m.notes}</i>`;
         });
 
+        // Store the full analysis object including notes
         pendingConfirmations.set(ctx.from.id, analysis.medications);
 
-        await ctx.reply(confirmMsg, Markup.inlineKeyboard([
-            Markup.button.callback("✅ Yes, Add All", "confirm_prescription"),
-            Markup.button.callback("❌ No, Cancel", "cancel_prescription")
-        ]));
+        await ctx.reply(confirmMsg, {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback("✅ Yes, Add All", "confirm_prescription")],
+                [Markup.button.callback("❌ No, Cancel", "cancel_prescription")]
+            ])
+        });
 
     } catch (e) {
-        console.error(e);
-        await ctx.reply("Error processing image.");
+        console.error("Prescription Scan Error:", e);
+        await ctx.reply("Error processing image. Please ensure the photo is clear.");
     }
 });
 
-// --- FIX APPLIED HERE: SANITIZING DATA BEFORE DB INSERT ---
+bot.action(/scan_lab_(.+)/, async (ctx) => {
+    const uniqueId = ctx.match[1];
+    const fileId = photoCache.get(uniqueId as string);
+    
+    if (!fileId) {
+        return await ctx.answerCbQuery("⚠️ Session expired.", { show_alert: true });
+    }
+
+    try {
+        await ctx.editMessageText("🔬 Analyzing lab report... please wait.");
+        
+        const fileLink = await ctx.telegram.getFileLink(fileId);
+        const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' });
+        
+        const analysis = await analyzeLabReport(Buffer.from(response.data));
+
+        // --- PROPER FORMATTING START ---
+        if (!analysis.summary.key_biomarkers || analysis.summary.key_biomarkers.length === 0) {
+            return await ctx.reply("⚠️ Could not extract specific biomarkers. Please consult a doctor.");
+        }
+
+        let reportText = `📊 **Lab Report Analysis**\n\n`;
+
+        analysis.summary.key_biomarkers.forEach((b: any) => {
+            // Determine emoji based on interpretation
+            const isNormal = b.interpretation.toLowerCase().includes('normal') || 
+                             b.interpretation.toLowerCase().includes('within normal limits');
+            const statusEmoji = isNormal ? '✅' : '⚠️';
+
+            reportText += `${statusEmoji} **${b.name}**\n`;
+            reportText += `   Result: \`${b.value} ${b.units}\`\n`;
+            reportText += `   Range: ${b.reference_range}\n`;
+            reportText += `   *${b.interpretation}*\n\n`;
+        });
+
+        reportText += `💡 _Disclaimer: This is an AI summary. Always verify with your healthcare provider._`;
+        // --- PROPER FORMATTING END ---
+
+        await ctx.reply(reportText, { parse_mode: 'Markdown' });
+    } catch (e) {
+        console.error("Lab Analysis Error:", e);
+        await ctx.reply("Failed to analyze the lab report. Please try a clearer image.");
+    }
+});
+
 bot.action("confirm_prescription", async (ctx) => {
     const meds = pendingConfirmations.get(ctx.from.id);
-    if (meds) {
-        for (const m of meds) {
-            // Convert "Daily" -> 1, "Morning" -> "09:00"
-            const freq = parseFrequency(m.frequency);
-            const time = parseTime(m.time);
+    if (!meds) return await ctx.editMessageText("⚠️ Session expired.");
 
-            await db.db.insert(db.medications).values({
-                telegramId: ctx.from.id,
-                name: m.name,
-                dosage: m.dosage,
-                schedule: time,
-                frequency: freq
-            });
-        }
-        pendingConfirmations.delete(ctx.from.id);
-        await ctx.editMessageText("✅ All medications added to your schedule.");
-    } else {
-        await ctx.editMessageText("⚠️ Session expired. Please upload again.");
+    for (const m of meds) {
+        const freq = parseFrequency(m.frequency);
+        const time = parseTime(m.time);
+
+        await db.db.insert(db.medications).values({
+            telegramId: ctx.from.id,
+            name: m.name,
+            dosage: m.dosage,
+            schedule: time,
+            frequency: freq,
+            // Capture notes from the scanner (e.g. "Take after breakfast")
+            notes: m.notes || null, 
+            allowSnooze: m.allowSnooze ?? true
+        });
     }
+    
+    pendingConfirmations.delete(ctx.from.id);
+    await ctx.editMessageText("✅ All medications added to your schedule.");
 });
 
 bot.action("cancel_prescription", async (ctx) => {
@@ -575,6 +645,17 @@ bot.command('becomecaretaker', (ctx) => {
             Markup.button.userRequest("👤 Share Patient Contact", 2) // ID 2 for differentiation
         ]).resize().oneTime()
     );
+});
+
+bot.command('timezone', async (ctx) => {
+    const tz = ctx.payload; // e.g., /timezone Europe/London
+    if (!tz) return ctx.reply("Usage: /timezone Asia/Kolkata");
+    
+    await db.db.insert(db.users)
+        .values({ telegramId: ctx.from.id, timezone: tz })
+        .onConflictDoUpdate({ target: db.users.telegramId, set: { timezone: tz } });
+    
+    ctx.reply(`✅ Timezone updated to ${tz}`);
 });
 
 bot.on('message', async (ctx, next) => {
@@ -611,7 +692,21 @@ bot.start((ctx) => {
 });
 
 bot.on(message('text'), async (ctx) => {
-  await handleUserIntent(ctx, ctx.message.text);
+    const text = ctx.message.text;
+    const userId = ctx.from.id;
+
+    const parsed = await parseMedCommand(text);
+
+    const healthKeywords = ['diet', 'eat', 'food', 'allergy', 'workout', 'health'];
+    if (parsed.intent === 'general_conversation' && healthKeywords.some(k => text.toLowerCase().includes(k))) {
+        const logs = await db.db.select().from(db.healthLogs).where(eq(db.healthLogs.telegramId, userId)).limit(5);
+        const healthContext = logs.map(l => `${l.type}: ${l.value}`).join(", ");
+        const response = await getHealthAwareResponse(text, healthContext);
+        return ctx.reply(response, { parse_mode: 'Markdown' });
+    }
+
+    // 3. Otherwise, proceed with the command logic
+    await handleUserIntent(ctx, text, parsed)
 });
 
 bot.on(message('voice'), async (ctx) => {
@@ -703,41 +798,41 @@ cron.schedule('0 9 * * 0', async () => {
 });
 
 cron.schedule('* * * * *', async () => {
-    const now = new Date();
-    // Force IST time string
-    const currentTime = now.toLocaleTimeString('en-GB', { 
-        hour: '2-digit', 
-        minute: '2-digit', 
-        hour12: false, 
-        timeZone: 'Asia/Kolkata' 
-    });
-
-    // 1. Regular Schedule Check
-    const dueMeds = await db.db.select().from(db.medications).where(eq(db.medications.schedule, currentTime));
+    const allMeds = await db.db.select().from(db.medications);
     
-    // 2. Snooze Check (Simple comparison assumes server time for snoozing, which is okay for relative delays)
-    const snoozedMeds = await db.db.select().from(db.medications)
-        .where(and(isNotNull(db.medications.snoozedUntil), lte(db.medications.snoozedUntil, now)));
+    for (const med of allMeds) {
+        // Fetch user's preferred timezone (default to IST)
+        const userSettings = await db.db.select().from(db.users).where(eq(db.users.telegramId, med.telegramId)).limit(1);
+        const userTz = userSettings[0]?.timezone || 'Asia/Kolkata';
 
-    const allDue = [...dueMeds, ...snoozedMeds];
+        // Check time in the user's specific timezone
+        const userTimeNow = new Date().toLocaleTimeString('en-GB', { 
+            hour: '2-digit', minute: '2-digit', hour12: false, timeZone: userTz 
+        });
 
-    for (const med of allDue) {
-        if (med.snoozedUntil) {
-            await db.db.update(db.medications).set({ snoozedUntil: null }).where(eq(db.medications.id, med.id));
-        }
-        
-        await bot.telegram.sendMessage(
-            med.telegramId, 
-            `⏰ <b>It's time for your medication!</b>\n\nTake: <b>${med.name}</b> (${med.dosage})`,
-            {
-                parse_mode: 'HTML',
-                ...Markup.inlineKeyboard([
-                    [Markup.button.callback("✅ Taken", `taken_${med.id}`)],
-                    [Markup.button.callback("❌ Skip", `missed_${med.id}`)],
-                    [Markup.button.callback("💤 Snooze 10m", `snooze_${med.id}`)]
-                ])
+        if (med.schedule === userTimeNow) {
+            let msg = `⏰ **MEDICATION REMINDER**\nTake: ${med.name} (${med.dosage})`;
+            
+            // Add custom notes to reminder
+            if (med.notes) msg += `\n\n📝 **Note:** ${med.notes}`;
+
+            const buttons = [
+                Markup.button.callback("✅ Taken", `taken_${med.id}`),
+                Markup.button.callback("❌ Skip", `missed_${med.id}`)
+            ];
+            
+            // Enforce "No Snooze" rule if specified in notes
+            if (med.allowSnooze && !med.notes?.toLowerCase().includes("don't allow snooze")) {
+                buttons.push(Markup.button.callback("💤 Snooze 10m", `snooze_${med.id}`));
             }
-        );
+
+            // Send with sound/vibration (Alarm effect)
+            await bot.telegram.sendMessage(med.telegramId, msg, {
+                parse_mode: 'Markdown',
+                disable_notification: false, // Ensures sound plays
+                ...Markup.inlineKeyboard([buttons])
+            });
+        }
     }
 });
 
@@ -854,6 +949,7 @@ bot.telegram.setMyCommands([
   { command: 'schedule', description: 'View or manage your schedule' },
   { command: 'appointments', description: 'View or manage your appointments' },
   { command: 'health_measurements', description: 'View or manage your health measurements' },
+  { command: 'timezone', description: 'Set your timezone' },
 ]);
 console.log("🚀 MediAid Bot is running...");
 

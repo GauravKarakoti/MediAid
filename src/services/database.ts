@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-http';
-import { pgTable, serial, text, integer, timestamp, bigint, boolean, date } from 'drizzle-orm/pg-core'; // Added date
+import { pgTable, serial, text, integer, timestamp, bigint, boolean } from 'drizzle-orm/pg-core'; // Added date
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -8,7 +8,11 @@ dotenv.config();
 const sql = neon(process.env.DATABASE_URL!);
 export const db = drizzle(sql);
 
-// --- UPDATED MEDICATIONS TABLE ---
+export const users = pgTable('users', {
+  telegramId: bigint('telegram_id', { mode: 'number' }).primaryKey(),
+  timezone: text('timezone').default('Asia/Kolkata'), // Default to IST
+});
+
 export const medications = pgTable('medications', {
   id: serial('id').primaryKey(),
   telegramId: bigint('telegram_id', { mode: 'number' }).notNull(),
@@ -18,9 +22,11 @@ export const medications = pgTable('medications', {
   frequency: integer('frequency').default(1),
   createdAt: timestamp('created_at').defaultNow(),
   reminderEnabled: boolean('reminder_enabled').default(true),
-  // [NEW] Feature 10: Completion time/duration
   endDate: timestamp('end_date'),
   snoozedUntil: timestamp('snoozed_until'),
+  // [NEW] Store custom notes and snooze settings
+  notes: text('notes'), 
+  allowSnooze: boolean('allow_snooze').default(true),
 });
 
 export const adherenceLogs = pgTable('adherence_logs', {
@@ -52,4 +58,6 @@ export const appointments = pgTable('appointments', {
   title: text('title').notNull(),
   date: timestamp('date').notNull(),
   reminded: boolean('reminded').default(false),
+  // [NEW] Notes for appointments
+  notes: text('notes'),
 });

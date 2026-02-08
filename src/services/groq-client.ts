@@ -20,6 +20,8 @@ export interface MedCommand {
   healthValue?: string;
   appointmentTitle?: string;
   appointmentDate?: string;
+  notes?: string;        // [NEW] To store "eat after breakfast"
+  allowSnooze?: boolean;
 }
 
 // MERGED SYSTEM PROMPT: Updated with Time Inference and query_missed
@@ -38,6 +40,8 @@ Modes/Intents:
      - BP/Heart meds -> "09:00"
      - Twice daily -> Set time to the *first* dose (e.g., "09:00").
      - Do NOT return null for time if it can be guessed.
+     - "notes": Optional instructions (e.g., "eat after breakfast", "don't let me snooze").
+     - "allowSnooze": Set to false if user explicitly forbids snoozing.
 3. "remove_medication": User wants to stop a med.
 4. "query_schedule": "schedule", "routine", "what do I take".
 5. "update_medication": Change details.
@@ -47,6 +51,7 @@ Modes/Intents:
    - EXTRACT "appointmentDate" in strict format: "YYYY-MM-DD HH:mm".
    - If time is missing, default to "09:00".
    - Example: "Feb 20 at 2pm" -> "2026-02-20 14:00".
+   - "notes": Optional instructions (e.g., "After breakfast").
 9. "sos": "Help me", "Message caretaker".
 10. "query_health": "Show my health logs".
 11. "query_appointments": "Show my appointments".
@@ -60,6 +65,8 @@ Return JSON structure:
   "medicationName": string | null, 
   "dosage": string | null, 
   "time": "HH:MM" | null, 
+  "notes": string | null,
+  "allowSnooze": boolean | null,
   "frequencyDays": number | null,
   "durationDays": number | null,
   "healthType": string | null,
@@ -71,6 +78,49 @@ Return JSON structure:
   "response": string | null
 }
 `;
+
+export async function analyzeLabReport(imageBuffer: Buffer): Promise<any> {
+    const completion = await groq.chat.completions.create({
+        model: "meta-llama/llama-4-scout-17b-16e-instruct", 
+        messages: [
+            {
+                role: "user",
+                content: [
+                    { 
+                        type: "text", 
+                        text: "Analyze this lab report. Identify key biomarkers, their values, and explain them. Return the analysis in a valid JSON format with a 'summary' field." 
+                    },
+                    { type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBuffer.toString('base64')}` } }
+                ]
+            }
+        ],
+        response_format: { type: "json_object" },
+    });
+    return JSON.parse(completion.choices[0]?.message.content || '{}');
+}
+
+export async function getHealthAwareResponse(userInput: string, healthContext: string): Promise<string> {
+    const completion = await groq.chat.completions.create({
+        messages: [
+            { 
+              role: "system", 
+              content: `You are MediAid, a personalized health assistant. 
+              
+              YOUR GUIDELINES:
+              1. PRIMARY TASK: Always fulfill the user's specific request (e.g., if they ask for a diet for malaria, provide a malaria diet).
+              2. CONTEXTUAL AWARENESS: Use the user's health profile (vitals, symptoms, and logs) as safety constraints and context.
+                 - If the user has an allergy (e.g., peanuts), ensure your advice (the malaria diet) strictly excludes that allergen.
+                 - If the user's query differs from their logs (e.g., asking about malaria when they logged a headache), provide the requested info but briefly acknowledge the logs (e.g., "I see you've been having headaches; here is a malaria diet that is also easy on the head...").
+              3. SAFETY FIRST: If a suggestion conflicts with a logged vital (e.g., high BP), provide a clear medical disclaimer.
+              
+              User Health Profile: ${healthContext}` 
+            },
+            { role: "user", content: userInput }
+        ],
+        model: "llama-3.3-70b-versatile",
+    });
+    return completion.choices[0]?.message.content || "I'm here to help.";
+}
 
 export async function transcribeAudio(filePath: string): Promise<string> {
   const transcription = await groq.audio.transcriptions.create({

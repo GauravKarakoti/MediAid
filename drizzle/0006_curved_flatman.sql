@@ -1,0 +1,1 @@
+ALTER TABLE "medications" ADD COLUMN "last_reminder_message_id" integer;

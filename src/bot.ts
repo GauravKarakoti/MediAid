@@ -53,13 +53,22 @@ function inferTimeFromMedName(name: string): string {
 }
 
 function parseTime(t: string | null | undefined, medName: string = ""): string {
-    // If the LLM successfully inferred a time (e.g. "22:00"), trust it.
-    if (t && t.match(/^\d{1,2}:\d{2}$/)) {
-        return t.padStart(5, '0');
+    if (!t) return inferTimeFromMedName(medName);
+
+    // Try to handle "2:30 PM" or "14:30" formats
+    const timeMatch = t.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+    if (timeMatch) {
+        let hours = parseInt(timeMatch[1] as string);
+        const minutes = timeMatch[2];
+        const ampm = timeMatch[3]?.toUpperCase();
+
+        if (ampm === 'PM' && hours < 12) hours += 12;
+        if (ampm === 'AM' && hours === 12) hours = 0;
+
+        return `${hours.toString().padStart(2, '0')}:${minutes}`;
     }
-    // Fallback logic if LLM failed (though prompt is now stronger)
-    if (!t) return "09:00"; 
     
+    // Fallback to existing inference logic
     return inferTimeFromMedName(medName);
 }
 
@@ -72,6 +81,19 @@ function getISTTime(): string {
         hour12: false, 
         timeZone: 'Asia/Kolkata' 
     });
+}
+
+async function sendAlarmSetupInstructions(ctx: Context) {
+    const instruction = `🔔 **Custom Alarm Setup**\n\n1. Download the audio file above.\n2. Go to **Bot Profile > Notifications > Customize/Select Tone**.\n3. Go to Sound and upload file as your custom notification sound.\n\nThis ensures you hear the alarm even if your phone is on 'vibrate'.`;
+    
+    try {
+        await ctx.replyWithAudio({ source: './assets/alarm_sound.mp3' }, {
+            caption: instruction,
+            parse_mode: 'Markdown'
+        });
+    } catch (err) {
+        await ctx.reply(instruction, { parse_mode: 'Markdown' });
+    }
 }
 
 async function handleUserIntent(ctx: Context, text: string, command?: any) {
@@ -428,7 +450,7 @@ async function addMedicationToDb(ctx: Context, userId: number, parsed: any) {
     await ctx.reply(confirmMsg, { parse_mode: 'HTML' });
 }
 
-bot.help((ctx) => {
+bot.help(async (ctx) => {
   const helpMessage = `
 🆘 **MediAid Help - How to Use**
 
@@ -462,6 +484,7 @@ I am your personal health assistant. You can talk to me via text or voice!
 • Say **"Help me"** or **"SOS"** to immediately alert your caretaker.
   `;
   ctx.reply(helpMessage, { parse_mode: 'Markdown' });
+  await sendAlarmSetupInstructions(ctx);
 });
 
 // --- Safety Confirmation Actions ---
@@ -684,11 +707,12 @@ bot.on('message', async (ctx, next) => {
     return next();
 });
 
-bot.start((ctx) => {
+bot.start(async (ctx) => {
   ctx.reply(
     `👵 Welcome to MediAid.\nTry saying 'Add 5mg Lisinopril at 8 AM' or 'I took my medicine'.\n\nType /help at any time to see everything I can do.`, 
     Markup.keyboard([['My Schedule', 'I took my medicine']]).resize()
   );
+  await sendAlarmSetupInstructions(ctx);
 });
 
 bot.on(message('text'), async (ctx) => {
@@ -804,43 +828,56 @@ cron.schedule('* * * * *', async () => {
         const userSettings = await db.db.select().from(db.users).where(eq(db.users.telegramId, med.telegramId)).limit(1);
         const userTz = userSettings[0]?.timezone || 'Asia/Kolkata';
 
-        const userTimeNow = new Date().toLocaleTimeString('en-GB', { 
+        const now = new Date();
+        const userTimeNow = now.toLocaleTimeString('en-GB', { 
             hour: '2-digit', minute: '2-digit', hour12: false, timeZone: userTz 
         });
 
-        if (med.schedule === userTimeNow) {
-            let msg = `⏰ **MEDICATION REMINDER**\nTake: ${med.name} (${med.dosage})`;
-            if (med.notes) msg += `\n\n📝 **Note:** ${med.notes}`;
+        // --- NAG LIMIT LOGIC ---
+        // Only nag if current time is >= schedule AND within a 1-hour window
+        const [schedH, schedM] = med.schedule.split(':').map(Number);
+        const schedDate = new Date(now);
+        schedDate.setHours(schedH as number, schedM, 0, 0);
+        
+        const diffInMinutes = (now.getTime() - schedDate.getTime()) / 60000;
 
+        // Condition: Time has passed (diff > 0) AND it's less than 60 minutes ago
+        if (diffInMinutes >= 0 && diffInMinutes < 60) {
+            
+            // Check if user already responded today
+            const todayLogs = await db.db.execute(sql`
+                SELECT id FROM adherence_logs 
+                WHERE medication_id = ${med.id} 
+                AND DATE(timestamp AT TIME ZONE 'Asia/Kolkata') = DATE(NOW() AT TIME ZONE 'Asia/Kolkata')
+            `);
+
+            if (todayLogs.rows.length > 0) continue;
+
+            // Snooze logic
+            if (med.snoozedUntil && med.snoozedUntil > new Date()) continue;
+
+            // Delete previous nagging message to prevent clutter
+            if (med.lastReminderMessageId) {
+                try {
+                    await bot.telegram.deleteMessage(med.telegramId, med.lastReminderMessageId);
+                } catch (e) { /* ignore deletion errors */ }
+            }
+
+            // Send new message
             const buttons = [
                 Markup.button.callback("✅ Taken", `taken_${med.id}`),
                 Markup.button.callback("❌ Skip", `missed_${med.id}`)
             ];
-            
-            if (med.allowSnooze && !med.notes?.toLowerCase().includes("don't allow snooze")) {
-                buttons.push(Markup.button.callback("💤 Snooze 10m", `snooze_${med.id}`));
-            }
+            if (med.allowSnooze) buttons.push(Markup.button.callback("💤 Snooze 10m", `snooze_${med.id}`));
 
-            // --- ALARM MODIFICATION ---
-            // Send an actual audio file to act as the "ring"
-            try {
-                await bot.telegram.sendVoice(med.telegramId, 
-                    { source: './assets/alarm_sound.ogg' }, 
-                    {
-                        caption: msg,
-                        parse_mode: 'Markdown',
-                        disable_notification: false,
-                        ...Markup.inlineKeyboard([buttons])
-                    }
-                );
-            } catch (err) {
-                // Fallback to text if audio fails
-                await bot.telegram.sendMessage(med.telegramId, msg, {
-                    parse_mode: 'Markdown',
-                    disable_notification: false,
-                    ...Markup.inlineKeyboard([buttons])
-                });
-            }
+            const sentMsg = await bot.telegram.sendMessage(med.telegramId, 
+                `⏰ **REMINDER**\nTake: ${med.name} (${med.dosage})${med.notes ? `\n\n📝 ${med.notes}` : ''}`, 
+                { parse_mode: 'Markdown', ...Markup.inlineKeyboard([buttons]) }
+            );
+
+            await db.db.update(db.medications)
+                .set({ lastReminderMessageId: sentMsg.message_id })
+                .where(eq(db.medications.id, med.id));
         }
     }
 });
@@ -895,6 +932,7 @@ cron.schedule('59 23 * * *', async () => {
 
 bot.action(/taken_(.+)/, async (ctx) => {
     const medId = parseInt(ctx.match[1]!);
+    await db.db.update(db.medications).set({ lastReminderMessageId: null }).where(eq(db.medications.id, medId));
     await db.db.insert(db.adherenceLogs).values({ telegramId: ctx.from!.id, medicationId: medId, status: 'taken' });
     await ctx.answerCbQuery();
     
@@ -913,6 +951,7 @@ bot.action("sos_trigger", async (ctx) => {
 
 bot.action(/missed_(.+)/, async (ctx) => {
   const medId = parseInt(ctx.match[1]!);
+  await db.db.update(db.medications).set({ lastReminderMessageId: null }).where(eq(db.medications.id, medId));
   const patientId = ctx.from!.id;
   const med = await db.db.select().from(db.medications).where(eq(db.medications.id, medId)).limit(1);
   const medName = med[0]?.name || "Unknown";

@@ -27,6 +27,7 @@ export const medications = pgTable('medications', {
   // [NEW] Store custom notes and snooze settings
   notes: text('notes'), 
   allowSnooze: boolean('allow_snooze').default(true),
+  lastReminderMessageId: integer('last_reminder_message_id'),
 });
 
 export const adherenceLogs = pgTable('adherence_logs', {

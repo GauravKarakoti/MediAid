@@ -683,8 +683,40 @@ bot.command('timezone', async (ctx) => {
 
 bot.on('message', async (ctx, next) => {
     const msg = ctx.message as any;
+
+    // --- FIX: Handle "Set Caretaker" Flow (request_id 1) ---
+    if (msg.user_shared && msg.user_shared.request_id === 1) {
+        const patientId = ctx.from.id;
+        const caregiverId = msg.user_shared.user_id;
+
+        try {
+            // Save the relationship to the database
+            await db.db.insert(db.caregivers)
+                .values({ 
+                    patientTelegramId: patientId, 
+                    caregiverTelegramId: caregiverId 
+                })
+                .onConflictDoUpdate({ 
+                    target: db.caregivers.patientTelegramId, 
+                    set: { caregiverTelegramId: caregiverId } 
+                });
+
+            await ctx.reply("✅ Caretaker successfully updated!");
+
+            // Optional: Notify the caretaker
+            try {
+                await bot.telegram.sendMessage(caregiverId, `ℹ️ You have been assigned as a caretaker for ${ctx.from.first_name || 'a patient'}.`);
+            } catch (e) {
+                await ctx.reply("⚠️ Caretaker saved, but I couldn't notify them. Please ask them to start this bot.");
+            }
+        } catch (error) {
+            console.error("Error setting caretaker:", error);
+            await ctx.reply("Failed to set caretaker. Please try again.");
+        }
+        return; // Stop further processing
+    }
     
-    // Check if this is the "Become Caretaker" flow (request_id 2)
+    // --- Existing "Become Caretaker" Flow (request_id 2) ---
     if (msg.user_shared && msg.user_shared.request_id === 2) {
         const caretakerId = ctx.from.id;
         const patientId = msg.user_shared.user_id;
@@ -694,7 +726,7 @@ bot.on('message', async (ctx, next) => {
             await bot.telegram.sendMessage(patientId, 
                 `👤 User ${ctx.from.first_name} wants to be your Caretaker.\nDo you accept?`,
                 Markup.inlineKeyboard([
-                    Markup.button.callback("✅ Accept", `accept_care_${caretakerId}`),
+                    Markup.button.callback("✅ Accept", `accept_care_${caretakerId}`), //
                     Markup.button.callback("❌ Deny", `deny_care`)
                 ])
             );
@@ -704,6 +736,7 @@ bot.on('message', async (ctx, next) => {
         }
         return;
     }
+
     return next();
 });
 

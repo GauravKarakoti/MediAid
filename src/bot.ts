@@ -391,12 +391,11 @@ async function handleUserIntent(ctx: Context, text: string, command?: any) {
                 lte(db.medications.schedule, currentISTTime) // Scheduled before now
             ));
 
-        // FIX: Compare DATE(IST_Timestamp) with DATE(IST_Current_Time)
         const todayLogs = await db.db.execute(sql`
             SELECT medication_id FROM adherence_logs 
             WHERE telegram_id = ${userId} 
             AND status = 'taken' 
-            AND DATE(timestamp AT TIME ZONE 'Asia/Kolkata') = DATE(NOW() AT TIME ZONE 'Asia/Kolkata')
+            AND DATE(timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = DATE(NOW() AT TIME ZONE 'Asia/Kolkata')
         `);
         
         const takenIds = todayLogs.rows.map((r: any) => r.medication_id);
@@ -876,12 +875,10 @@ cron.schedule('* * * * *', async () => {
 
         // Condition: Time has passed (diff > 0) AND it's less than 60 minutes ago
         if (diffInMinutes >= 0 && diffInMinutes < 60) {
-            
-            // Check if user already responded today
             const todayLogs = await db.db.execute(sql`
                 SELECT id FROM adherence_logs 
                 WHERE medication_id = ${med.id} 
-                AND DATE(timestamp AT TIME ZONE 'Asia/Kolkata') = DATE(NOW() AT TIME ZONE 'Asia/Kolkata')
+                AND DATE(timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = DATE(NOW() AT TIME ZONE 'Asia/Kolkata')
             `);
 
             if (todayLogs.rows.length > 0) continue;

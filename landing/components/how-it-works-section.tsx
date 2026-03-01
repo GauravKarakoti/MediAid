@@ -6,7 +6,7 @@ const steps = [
     icon: MessageCircle,
     title: "Start the Bot",
     description:
-      'Open Telegram and search for @MediAidBot. Tap "Start" to begin your health journey in seconds.',
+      'Open Telegram and search for @Medi_Aid_Bot. Tap "Start" to begin your health journey in seconds.',
   },
   {
     number: "02",
@@ -27,7 +27,7 @@ const steps = [
 export function HowItWorksSection() {
   return (
     <section id="how-it-works" className="bg-background py-20 lg:py-28">
-      <div className="mx-auto max-w-6xl px-6">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="mx-auto mb-16 max-w-2xl text-center">
           <p className="mb-3 text-sm font-semibold uppercase tracking-widest text-primary">
             How It Works

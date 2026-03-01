@@ -4,7 +4,7 @@ import { TelegramIcon } from "@/components/icons"
 export function CtaSection() {
   return (
     <section className="bg-background py-20 lg:py-28">
-      <div className="mx-auto max-w-6xl px-6">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="relative overflow-hidden rounded-3xl bg-primary px-8 py-16 text-center md:px-16 md:py-20">
           <div className="absolute inset-0 -z-0 opacity-10">
             <div className="absolute -left-10 -top-10 h-64 w-64 rounded-full bg-card blur-3xl" />
@@ -26,7 +26,7 @@ export function CtaSection() {
               className="mt-8 gap-2.5 bg-background px-8 text-base font-semibold text-foreground shadow-lg hover:bg-background/90"
             >
               <a
-                href="https://t.me/MediAidBot"
+                href="https://t.me/Medi_Aid_Bot"
                 target="_blank"
                 rel="noopener noreferrer"
               >

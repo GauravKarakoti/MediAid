@@ -11,7 +11,7 @@ export function HeroSection() {
         <div className="absolute -bottom-20 -right-20 h-96 w-96 rounded-full bg-accent/10 blur-3xl" />
       </div>
 
-      <div className="mx-auto flex max-w-6xl flex-col items-center gap-12 px-6 py-20 lg:flex-row lg:gap-16 lg:py-28">
+      <div className="mx-auto flex max-w-7xl flex-col items-center gap-12 px-4 sm:px-6 lg:px-8 pb-20 pt-15 lg:flex-row lg:gap-16 lg:pb-28">
         <div className="flex flex-1 flex-col items-center text-center lg:items-start lg:text-left">
           <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-1.5 text-sm text-muted-foreground">
             <Shield className="h-4 w-4 text-primary" />
@@ -35,7 +35,7 @@ export function HeroSection() {
               className="gap-2.5 bg-primary px-8 text-base font-semibold text-primary-foreground shadow-lg hover:bg-primary/90"
             >
               <a
-                href="https://t.me/MediAidBot"
+                href="https://t.me/Medi_Aid_Bot"
                 target="_blank"
                 rel="noopener noreferrer"
               >

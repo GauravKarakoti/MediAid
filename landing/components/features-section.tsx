@@ -49,7 +49,7 @@ const features = [
 export function FeaturesSection() {
   return (
     <section id="features" className="bg-card py-20 lg:py-28">
-      <div className="mx-auto max-w-6xl px-6">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="mx-auto mb-16 max-w-2xl text-center">
           <p className="mb-3 text-sm font-semibold uppercase tracking-widest text-primary">
             Features

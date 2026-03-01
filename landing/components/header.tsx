@@ -6,6 +6,7 @@ import { Menu, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { TelegramIcon } from "@/components/icons"
 import { ThemeToggle } from "@/components/theme-toggle"
+import Image from "next/image"
 
 const navLinks = [
   { label: "Features", href: "#features" },
@@ -18,21 +19,16 @@ export function Header() {
 
   return (
     <header className="sticky top-0 z-50 bg-background/80 backdrop-blur-md border-b border-border">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+      <div className="mx-auto flex max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8 py-4">
         <Link href="/" className="flex items-center gap-2" aria-label="MediAid home">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              className="h-5 w-5 text-primary-foreground"
-              aria-hidden="true"
-            >
-              <path
-                d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14h-2v-2h2v2zm0-4h-2V7h2v5zm4 4h-2v-2h2v2zm0-4h-2V7h2v5z"
-                fill="currentColor"
-              />
-            </svg>
-          </div>
+          <Image 
+            src="/icon.png" 
+            alt="MediAid Logo" 
+            width={36} 
+            height={36} 
+            className="rounded-lg"
+            priority
+          />
           <span className="text-xl font-bold tracking-tight text-foreground">
             MediAid
           </span>
@@ -53,7 +49,7 @@ export function Header() {
         <div className="hidden items-center gap-3 md:flex">
           <ThemeToggle />
           <Button asChild size="sm" className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90">
-            <a href="https://t.me/MediAidBot" target="_blank" rel="noopener noreferrer">
+            <a href="https://t.me/Medi_Aid_Bot" target="_blank" rel="noopener noreferrer">
               <TelegramIcon className="h-4 w-4" />
               Start Chatting
             </a>
@@ -86,7 +82,7 @@ export function Header() {
             <div className="flex items-center gap-3 mt-2">
               <ThemeToggle />
               <Button asChild size="sm" className="flex-1 gap-2 bg-primary text-primary-foreground hover:bg-primary/90">
-                <a href="https://t.me/MediAidBot" target="_blank" rel="noopener noreferrer">
+                <a href="https://t.me/Medi_Aid_Bot" target="_blank" rel="noopener noreferrer">
                   <TelegramIcon className="h-4 w-4" />
                   Start Chatting
                 </a>

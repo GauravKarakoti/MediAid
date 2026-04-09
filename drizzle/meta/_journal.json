@@ -50,6 +50,13 @@
       "when": 1770555623753,
       "tag": "0006_curved_flatman",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1775754706786,
+      "tag": "0007_curvy_cobalt_man",
+      "breakpoints": true
     }
   ]
 }

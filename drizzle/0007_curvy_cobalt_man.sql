@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "platform" text DEFAULT 'telegram' NOT NULL;

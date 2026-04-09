@@ -1,14 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-http';
-import {
-  pgTable,
-  serial,
-  text,
-  integer,
-  timestamp,
-  bigint,
-  boolean,
-} from 'drizzle-orm/pg-core';
+import { pgTable, serial, text, integer, timestamp, bigint, boolean } from 'drizzle-orm/pg-core'; // Added date
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -18,8 +10,7 @@ export const db = drizzle(sql);
 
 export const users = pgTable('users', {
   telegramId: bigint('telegram_id', { mode: 'number' }).primaryKey(),
-  platform: text('platform').notNull().default('telegram'), // telegram | whatsapp
-  timezone: text('timezone').default('Asia/Kolkata'),
+  timezone: text('timezone').default('Asia/Kolkata'), // Default to IST
 });
 
 export const medications = pgTable('medications', {
@@ -33,7 +24,8 @@ export const medications = pgTable('medications', {
   reminderEnabled: boolean('reminder_enabled').default(true),
   endDate: timestamp('end_date'),
   snoozedUntil: timestamp('snoozed_until'),
-  notes: text('notes'),
+  // [NEW] Store custom notes and snooze settings
+  notes: text('notes'), 
   allowSnooze: boolean('allow_snooze').default(true),
   lastReminderMessageId: integer('last_reminder_message_id'),
 });
@@ -52,11 +44,12 @@ export const caregivers = pgTable('caregivers', {
   caregiverTelegramId: bigint('caregiver_id', { mode: 'number' }).notNull(),
 });
 
+// --- [NEW] Feature 6: Health Measurements ---
 export const healthLogs = pgTable('health_logs', {
   id: serial('id').primaryKey(),
   telegramId: bigint('telegram_id', { mode: 'number' }).notNull(),
-  type: text('type').notNull(),
-  value: text('value').notNull(),
+  type: text('type').notNull(), // e.g., 'BP', 'Sugar', 'Weight'
+  value: text('value').notNull(), // e.g., '120/80', '140 mg/dL'
   timestamp: timestamp('timestamp').defaultNow(),
 });
 
@@ -66,5 +59,6 @@ export const appointments = pgTable('appointments', {
   title: text('title').notNull(),
   date: timestamp('date').notNull(),
   reminded: boolean('reminded').default(false),
+  // [NEW] Notes for appointments
   notes: text('notes'),
 });

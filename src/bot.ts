@@ -7,7 +7,7 @@ import { execSync } from 'child_process';
 import cron from 'node-cron';
 import { parseMedCommand, transcribeAudio, checkDosageSafety, analyzePrescription, analyzeLabReport, getHealthAwareResponse } from './services/groq-client.js';
 import * as db from './services/database.js';
-import { eq, and, ilike, sql, isNull, lt, gte, desc, isNotNull, lte, inArray } from 'drizzle-orm';
+import { eq, and, ilike, sql, isNull, lt, gte, desc, lte, inArray } from 'drizzle-orm';
 import { fileURLToPath } from 'url';
 import express from 'express';
 

@@ -592,24 +592,31 @@ bot.action(/scan_lab_(.+)/, async (ctx) => {
         const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' });
         
         const analysis = await analyzeLabReport(Buffer.from(response.data));
+        console.log(analysis);
 
         // --- PROPER FORMATTING START ---
-        if (!analysis.summary.key_biomarkers || analysis.summary.key_biomarkers.length === 0) {
+        if (!analysis.summary.biomarkers || analysis.summary.biomarkers.length === 0) {
             return await ctx.reply("⚠️ Could not extract specific biomarkers. Please consult a doctor.");
         }
 
         let reportText = `📊 **Lab Report Analysis**\n\n`;
 
-        analysis.summary.key_biomarkers.forEach((b: any) => {
-            // Determine emoji based on interpretation
-            const isNormal = b.interpretation.toLowerCase().includes('normal') || 
-                             b.interpretation.toLowerCase().includes('within normal limits');
+        analysis.summary.biomarkers.forEach((b: any) => {
+            // 1. Safely handle undefined interpretation
+            const interpretation = b.interpretation || "No interpretation provided";
+
+            // 2. Determine emoji based on interpretation safely
+            const isNormal = interpretation.toLowerCase().includes('normal') || 
+                             interpretation.toLowerCase().includes('within normal limits');
             const statusEmoji = isNormal ? '✅' : '⚠️';
 
-            reportText += `${statusEmoji} **${b.name}**\n`;
-            reportText += `   Result: \`${b.value} ${b.units}\`\n`;
-            reportText += `   Range: ${b.reference_range}\n`;
-            reportText += `   *${b.interpretation}*\n\n`;
+            reportText += `${statusEmoji} **${b.name || 'Unknown Biomarker'}**\n`;
+            
+            // 3. Added fallbacks for units and reference ranges as well just to be safe
+            const units = b.units ? ` ${b.units}` : '';
+            reportText += `  Result: \`${b.value || 'N/A'}${units}\`\n`;
+            reportText += `  Range: ${b.reference_range || 'N/A'}\n`;
+            reportText += `  *${interpretation}*\n\n`;
         });
 
         reportText += `💡 _Disclaimer: This is an AI summary. Always verify with your healthcare provider._`;
@@ -758,7 +765,18 @@ bot.on(message('text'), async (ctx) => {
         const logs = await db.db.select().from(db.healthLogs).where(eq(db.healthLogs.telegramId, userId)).limit(5);
         const healthContext = logs.map(l => `${l.type}: ${l.value}`).join(", ");
         const response = await getHealthAwareResponse(text, healthContext);
-        return ctx.reply(response, { parse_mode: 'Markdown' });
+        
+        // --- FIX: Convert LLM Markdown to Telegram-safe HTML ---
+        let safeResponse = response
+            .replace(/&/g, '&amp;')                 // Escape &
+            .replace(/</g, '&lt;')                  // Escape <
+            .replace(/>/g, '&gt;')                  // Escape >
+            .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>') // Convert **bold** to <b>bold</b>
+            .replace(/(^|\n)\* /g, '$1• ')          // Convert * bullets to literal •
+            .replace(/(^|\n)- /g, '$1• ')           // Convert - bullets to literal •
+            .replace(/_(.*?)_/g, '<i>$1</i>');      // Convert _italic_ to <i>italic</i>
+
+        return ctx.reply(safeResponse, { parse_mode: 'HTML' });
     }
 
     // 3. Otherwise, proceed with the command logic

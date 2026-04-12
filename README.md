@@ -35,6 +35,8 @@ MediAid is a voice-enabled personal health assistant for Telegram, designed to h
 - Schedule and manage doctor appointments.
 - Log health vitals (e.g., "*My BP is 120/80*") and view history.
 
+![User Jouney/Architecture](./User%20Journey_Architecture.png)
+
 ---
 
 ## 🛠️ Tech Stack

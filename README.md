@@ -4,6 +4,8 @@ MediAid is a voice-enabled personal health assistant for Telegram, designed to h
 ## LANDING PAGE: https://medi-aid-beta.vercel.app
 ## TELEGRAM BOT LIVE DEMO: https://t.me/MEDI_AID_BOT 
 
+![Poster](./Poster.jpeg)
+
 ---
 
 ## 🌟 Key Features
